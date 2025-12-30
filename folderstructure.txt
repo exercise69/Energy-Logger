@@ -1,0 +1,9 @@
+CIRCUITPY/
+│
+├─ html/             # PWA files: index.html, app.js, style.css, manifest.json, service-worker.js, icon-521.png etc.
+├─ lib/              # CircuitPython libraries (user must upload, e.g. "circup install --auto", ensure completeness!)
+├─ code.py           # Main script for QT-Py
+├─ boot.py           # Boot code for reload switch (optional)
+├─ secrets_shelly.py # Wi-Fi, Shelly, and optional MQTT credentials
+├─ sd/               # SD card logging directory (mounted)
+└─ README.md         # Project documentation (English and German)
