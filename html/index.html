@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Energy Logger</title>
+
+    <!-- PWA: Manifest -->
+    <link rel="manifest" href="/html/manifest.json" />
+
+    <!-- iOS Vollbild -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+    <meta name="apple-mobile-web-app-title" content="Shelly Logger" />
+
+    <!-- Icons -->
+    <link rel="apple-touch-icon" sizes="180x180" href="/html/icon-180.png" />
+    <link rel="apple-touch-icon" sizes="192x192" href="/html/icon-192.png" />
+    <link rel="apple-touch-icon" sizes="512x512" href="/html/icon-512.png" />
+
+    <!-- Stylesheet -->
+    <link rel="stylesheet" href="/html/style.css" />
+  </head>
+
+  <body>
+    <!-- OFFLINE BANNER -->
+    <div id="offlineBanner">
+      <div class="inner">
+        <span>Verbindungsstatus wird geprüft…</span>
+        <button id="wifiBtn">WLAN wechseln</button>
+      </div>
+    </div>
+
+    <div class="container">
+      <!-- HEADER -->
+      <h1>Energy Logger</h1>
+
+      <!-- STATUS TABLE -->
+      <div class="card">
+        <h2>Modus: <span id="mode">--</span></h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Parameter</th>
+              <th>Wert</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Power</td>
+              <td id="power">-- W</td>
+            </tr>
+            <tr>
+              <td>Energy</td>
+              <td id="energy">-- Wh</td>
+            </tr>
+            <tr>
+              <td>Shelly Status</td>
+              <td id="status">--</td>
+            </tr>
+            <tr>
+              <td>AP IP</td>
+              <td id="ap_ip">--</td>
+            </tr>
+            <tr>
+              <td>STA IP</td>
+              <td id="sta_ip">--</td>
+            </tr>
+            <tr>
+              <td>RTC Synced</td>
+              <td id="rtc_synced">--</td>
+            </tr>
+            <tr>
+              <td>RTC Default-Zeit</td>
+              <td id="rtc_default">--</td>
+            </tr>
+            <tr>
+              <td>SD Karte</td>
+              <td id="sd_status">--</td>
+            </tr>
+            <tr>
+              <td>MQTT aktiv</td>
+              <td id="mqtt_enabled">--</td>
+            </tr>
+            <tr>
+              <td>MQTT HW Switch</td>
+              <td id="mqtt_hw_switch">--</td>
+            </tr>
+            <tr>
+              <td>MQTT verbunden</td>
+              <td id="mqtt_connected">--</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- SHELLY ZEIT -->
+      <div class="card form-group">
+        <h2>Shelly Zeit setzen</h2>
+        <form id="timeForm">
+          <input type="datetime-local" id="dt" name="dt" required /><br />
+          <input type="submit" value="Zeit an ESP32 senden" />
+          <div id="timeResponse"></div>
+        </form>
+      </div>
+
+      <!-- SHELLY SWITCH -->
+      <div class="card form-group">
+        <h2>Shelly Switch Steuerung</h2>
+        <button id="toggleShelly">Lade...</button>
+        <p>Status: <span id="shelly_status">--</span></p>
+      </div>
+
+      <!-- LOGGING TOGGLE -->
+      <div class="card form-group">
+        <h2>Data Logging on/off</h2>
+        <button id="toggleLogging">Lade...</button>
+        <p>Status: <span id="logging_status">--</span></p>
+      </div>
+    </div>
+
+    <!-- JS auslagern -->
+    <script src="/html/app.js"></script>
+  </body>
+</html>
