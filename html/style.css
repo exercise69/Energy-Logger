@@ -152,3 +152,44 @@ input[type="submit"]:disabled {
     50px + env(safe-area-inset-top)
   ); /* Banner-Höhe + Safe Area */
 }
+
+/* Status-Indikator Punkte */
+.indicator {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: gray;
+  margin: 0 auto;
+}
+
+/* Farben */
+.indicator.running,
+.indicator.writing,
+.indicator.ok {
+  background: #4caf50; /* grün */
+}
+
+.indicator.idle {
+  background: #00c3ff; /* blau */
+}
+
+.indicator.disabled,
+.indicator.off {
+  background: #424242; /* grau */
+}
+
+.indicator.error {
+  background: #f44336; /* rot */
+}
+
+/* Tabellenzelle für Indikator mittig ausrichten */
+td .indicator,
+th .indicator {
+  vertical-align: middle;
+}
+
+td:nth-child(2) {
+  text-align: center;
+  width: 40px; /* schmal, aber genug Platz */
+}

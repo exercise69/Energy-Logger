@@ -42,52 +42,114 @@
           <thead>
             <tr>
               <th>Parameter</th>
+              <th></th>
               <th>Wert</th>
             </tr>
           </thead>
           <tbody>
             <tr>
               <td>Power</td>
+              <td class="indicator-cell">
+                <span class="indicator" id="power_indicator"></span>
+              </td>
               <td id="power">-- W</td>
             </tr>
             <tr>
               <td>Energy</td>
+              <td class="indicator-cell">
+                <span class="indicator" id="energy_indicator"></span>
+              </td>
               <td id="energy">-- Wh</td>
             </tr>
             <tr>
               <td>Shelly Status</td>
-              <td id="status">--</td>
+              <td class="indicator-cell">
+                <span class="indicator" id="status_indicator"></span>
+              </td>
+              <td class="shelly_status">--</td>
             </tr>
             <tr>
               <td>AP IP</td>
+              <td class="indicator-cell">
+                <span class="indicator" id="ap_ip_indicator"></span>
+              </td>
               <td id="ap_ip">--</td>
             </tr>
             <tr>
               <td>STA IP</td>
+              <td class="indicator-cell">
+                <span class="indicator" id="sta_ip_indicator"></span>
+              </td>
               <td id="sta_ip">--</td>
             </tr>
             <tr>
               <td>RTC Synced</td>
+              <td class="indicator-cell">
+                <span class="indicator" id="rtc_synced_indicator"></span>
+              </td>
               <td id="rtc_synced">--</td>
             </tr>
             <tr>
               <td>RTC Default-Zeit</td>
+              <td class="indicator-cell">
+                <span class="indicator" id="rtc_default_indicator"></span>
+              </td>
               <td id="rtc_default">--</td>
             </tr>
             <tr>
               <td>SD Karte</td>
+              <td class="indicator-cell">
+                <span class="indicator" id="sd_status_indicator"></span>
+              </td>
               <td id="sd_status">--</td>
             </tr>
             <tr>
+              <td>Data Logging</td>
+              <td class="indicator-cell">
+                <span class="indicator" id="logging_status_indicator"></span>
+              </td>
+              <td class="logging_status">--</td>
+            </tr>
+            <tr>
+              <td>SD Writing</td>
+              <td class="indicator-cell">
+                <span class="indicator" id="sd_writing_indicator"></span>
+              </td>
+              <td id="sd_writing">--</td>
+            </tr>
+            <tr>
+              <td>Queue Length</td>
+              <td class="indicator-cell">
+                <span class="indicator" id="sd_queue_len_indicator"></span>
+              </td>
+              <td id="sd_queue_len">--</td>
+            </tr>
+            <tr>
+              <td>Packages Dropped</td>
+              <td class="indicator-cell">
+                <span class="indicator" id="sd_queue_dropped_indicator"></span>
+              </td>
+              <td id="sd_queue_dropped">--</td>
+            </tr>
+            <tr>
               <td>MQTT aktiv</td>
+              <td class="indicator-cell">
+                <span class="indicator" id="mqtt_enabled_indicator"></span>
+              </td>
               <td id="mqtt_enabled">--</td>
             </tr>
             <tr>
               <td>MQTT HW Switch</td>
+              <td class="indicator-cell">
+                <span class="indicator" id="mqtt_hw_switch_indicator"></span>
+              </td>
               <td id="mqtt_hw_switch">--</td>
             </tr>
             <tr>
               <td>MQTT verbunden</td>
+              <td class="indicator-cell">
+                <span class="indicator" id="mqtt_connected_indicator"></span>
+              </td>
               <td id="mqtt_connected">--</td>
             </tr>
           </tbody>
@@ -108,14 +170,14 @@
       <div class="card form-group">
         <h2>Shelly Switch Steuerung</h2>
         <button id="toggleShelly">Lade...</button>
-        <p>Status: <span id="shelly_status">--</span></p>
+        <p>Status: <span class="shelly_status">--</span></p>
       </div>
 
       <!-- LOGGING TOGGLE -->
       <div class="card form-group">
         <h2>Data Logging on/off</h2>
         <button id="toggleLogging">Lade...</button>
-        <p>Status: <span id="logging_status">--</span></p>
+        <p>Status: <span class="logging_status">--</span></p>
       </div>
     </div>
 
