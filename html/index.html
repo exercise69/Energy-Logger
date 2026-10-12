@@ -2,186 +2,173 @@
 <html lang="de">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Energy Logger</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Energy-Logger</title>
 
-    <!-- PWA: Manifest -->
-    <link rel="manifest" href="/html/manifest.json" />
-
-    <!-- iOS Vollbild -->
+    <link rel="manifest" href="manifest.json" />
+    <meta name="theme-color" content="#222222" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black" />
-    <meta name="apple-mobile-web-app-title" content="Shelly Logger" />
-
-    <!-- Icons -->
-    <link rel="apple-touch-icon" sizes="180x180" href="/html/icon-180.png" />
-    <link rel="apple-touch-icon" sizes="192x192" href="/html/icon-192.png" />
-    <link rel="apple-touch-icon" sizes="512x512" href="/html/icon-512.png" />
-
-    <!-- Stylesheet -->
-    <link rel="stylesheet" href="/html/style.css" />
+    <meta name="apple-mobile-web-app-title" content="Energy-Logger" />
+    <link rel="apple-touch-icon" sizes="180x180" href="icon-180.png" />
+    <link rel="stylesheet" href="style.css" />
   </head>
 
   <body>
-    <!-- OFFLINE BANNER -->
+    <!-- BANNER -->
     <div id="offlineBanner">
       <div class="inner">
-        <span>Verbindungsstatus wird geprüft…</span>
+        <span id="bannerText">Verbindung wird geprüft…</span>
         <button id="wifiBtn">WLAN wechseln</button>
       </div>
     </div>
 
     <div class="container">
-      <!-- HEADER -->
-      <h1>Energy Logger</h1>
+      <h1>Energy-Logger</h1>
 
-      <!-- STATUS TABLE -->
+      <!-- MESSUNG -->
       <div class="card">
-        <h2>Modus: <span id="mode">--</span></h2>
-        <table>
-          <thead>
-            <tr>
-              <th>Parameter</th>
-              <th></th>
-              <th>Wert</th>
-            </tr>
-          </thead>
+        <div class="big">
+          <span id="power">--</span><small> W</small>
+        </div>
+        <table class="values">
           <tbody>
             <tr>
-              <td>Power</td>
-              <td class="indicator-cell">
-                <span class="indicator" id="power_indicator"></span>
-              </td>
-              <td id="power">-- W</td>
+              <td>Energie</td>
+              <td><span class="indicator" id="energy_indicator"></span></td>
+              <td id="energy">--</td>
             </tr>
             <tr>
-              <td>Energy</td>
-              <td class="indicator-cell">
-                <span class="indicator" id="energy_indicator"></span>
-              </td>
-              <td id="energy">-- Wh</td>
+              <td>Shelly</td>
+              <td><span class="indicator" id="shelly_indicator"></span></td>
+              <td id="shelly_status">--</td>
             </tr>
             <tr>
-              <td>Shelly Status</td>
-              <td class="indicator-cell">
-                <span class="indicator" id="status_indicator"></span>
-              </td>
-              <td class="shelly_status">--</td>
+              <td>Spannung / Strom</td>
+              <td></td>
+              <td id="volt_amp">--</td>
             </tr>
             <tr>
-              <td>AP IP</td>
-              <td class="indicator-cell">
-                <span class="indicator" id="ap_ip_indicator"></span>
-              </td>
-              <td id="ap_ip">--</td>
-            </tr>
-            <tr>
-              <td>STA IP</td>
-              <td class="indicator-cell">
-                <span class="indicator" id="sta_ip_indicator"></span>
-              </td>
-              <td id="sta_ip">--</td>
-            </tr>
-            <tr>
-              <td>RTC Synced</td>
-              <td class="indicator-cell">
-                <span class="indicator" id="rtc_synced_indicator"></span>
-              </td>
-              <td id="rtc_synced">--</td>
-            </tr>
-            <tr>
-              <td>RTC Default-Zeit</td>
-              <td class="indicator-cell">
-                <span class="indicator" id="rtc_default_indicator"></span>
-              </td>
-              <td id="rtc_default">--</td>
-            </tr>
-            <tr>
-              <td>SD Karte</td>
-              <td class="indicator-cell">
-                <span class="indicator" id="sd_status_indicator"></span>
-              </td>
-              <td id="sd_status">--</td>
-            </tr>
-            <tr>
-              <td>Data Logging</td>
-              <td class="indicator-cell">
-                <span class="indicator" id="logging_status_indicator"></span>
-              </td>
-              <td class="logging_status">--</td>
-            </tr>
-            <tr>
-              <td>SD Writing</td>
-              <td class="indicator-cell">
-                <span class="indicator" id="sd_writing_indicator"></span>
-              </td>
-              <td id="sd_writing">--</td>
-            </tr>
-            <tr>
-              <td>Queue Length</td>
-              <td class="indicator-cell">
-                <span class="indicator" id="sd_queue_len_indicator"></span>
-              </td>
-              <td id="sd_queue_len">--</td>
-            </tr>
-            <tr>
-              <td>Packages Dropped</td>
-              <td class="indicator-cell">
-                <span class="indicator" id="sd_queue_dropped_indicator"></span>
-              </td>
-              <td id="sd_queue_dropped">--</td>
-            </tr>
-            <tr>
-              <td>MQTT aktiv</td>
-              <td class="indicator-cell">
-                <span class="indicator" id="mqtt_enabled_indicator"></span>
-              </td>
-              <td id="mqtt_enabled">--</td>
-            </tr>
-            <tr>
-              <td>MQTT HW Switch</td>
-              <td class="indicator-cell">
-                <span class="indicator" id="mqtt_hw_switch_indicator"></span>
-              </td>
-              <td id="mqtt_hw_switch">--</td>
-            </tr>
-            <tr>
-              <td>MQTT verbunden</td>
-              <td class="indicator-cell">
-                <span class="indicator" id="mqtt_connected_indicator"></span>
-              </td>
-              <td id="mqtt_connected">--</td>
+              <td>Temperatur Shelly</td>
+              <td></td>
+              <td id="shelly_temp">--</td>
             </tr>
           </tbody>
         </table>
+        <div class="form-group">
+          <button id="toggleShelly" disabled>Lade…</button>
+          <p>Steckdose: <span id="output">--</span></p>
+        </div>
       </div>
 
-      <!-- SHELLY ZEIT -->
-      <div class="card form-group">
-        <h2>Shelly Zeit setzen</h2>
-        <form id="timeForm">
-          <input type="datetime-local" id="dt" name="dt" required /><br />
-          <input type="submit" value="Zeit an ESP32 senden" />
-          <div id="timeResponse"></div>
-        </form>
+      <!-- GERÄT -->
+      <div class="card">
+        <h2>Gerät</h2>
+        <table class="values">
+          <tbody>
+            <tr>
+              <td>Uhrzeit</td>
+              <td><span class="indicator" id="rtc_indicator"></span></td>
+              <td id="clock">--</td>
+            </tr>
+            <tr>
+              <td>SD-Karte</td>
+              <td><span class="indicator" id="sd_indicator"></span></td>
+              <td id="sd_status">--</td>
+            </tr>
+            <tr>
+              <td>Protokoll</td>
+              <td><span class="indicator" id="logging_indicator"></span></td>
+              <td id="logging_status">--</td>
+            </tr>
+            <tr>
+              <td>Warteschlange / verworfen</td>
+              <td><span class="indicator" id="queue_indicator"></span></td>
+              <td id="queue">--</td>
+            </tr>
+            <tr>
+              <td>Netz</td>
+              <td></td>
+              <td id="network">--</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="form-group">
+          <button id="toggleLogging" disabled>Lade…</button>
+        </div>
+        <details>
+          <summary>Uhr von Hand stellen</summary>
+          <p class="hint">
+            Normalerweise unnötig: die App stellt die Uhr beim Öffnen
+            automatisch nach der Zeit dieses Telefons.
+          </p>
+          <form id="timeForm" class="form-group">
+            <input type="datetime-local" id="dt" required /><br />
+            <input type="submit" value="Zeit setzen" />
+            <div id="timeResponse"></div>
+          </form>
+        </details>
       </div>
 
-      <!-- SHELLY SWITCH -->
-      <div class="card form-group">
-        <h2>Shelly Switch Steuerung</h2>
-        <button id="toggleShelly">Lade...</button>
-        <p>Status: <span class="shelly_status">--</span></p>
+      <!-- PROTOKOLLE -->
+      <div class="card">
+        <h2>Messprotokoll</h2>
+        <p class="hint">
+          Eine Datei je Monat. Der Download läuft in Stücken und kann abgebrochen werden.
+        </p>
+        <ul id="logList" class="file-list"><li>--</li></ul>
+        <div class="form-group">
+          <button id="dlAbort" class="secondary" hidden>Abbrechen</button>
+          <div id="dlProgress"></div>
+        </div>
       </div>
 
-      <!-- LOGGING TOGGLE -->
-      <div class="card form-group">
-        <h2>Data Logging on/off</h2>
-        <button id="toggleLogging">Lade...</button>
-        <p>Status: <span class="logging_status">--</span></p>
+      <!-- DIAGNOSE -->
+      <div class="card">
+        <details id="diagnostics">
+          <summary>Diagnose</summary>
+          <table>
+            <tbody>
+              <tr><td>Software Gerät</td><td id="d_version">--</td></tr>
+              <tr><td>Software Oberfläche</td><td id="d_ui_version">--</td></tr>
+              <tr><td>Laufzeit</td><td id="d_uptime">--</td></tr>
+              <tr><td>Abstürze</td><td id="d_crashes">--</td></tr>
+              <tr><td>Speicher frei / größter Block</td><td id="d_mem">--</td></tr>
+              <tr><td>CPU-Temperatur</td><td id="d_cpu">--</td></tr>
+              <tr><td>Schleife Mittel / max</td><td id="d_loop">--</td></tr>
+              <tr><td>Serverabbrüche (5 min)</td><td id="d_srv">--</td></tr>
+              <tr><td>Letzter SD-Fehler</td><td id="d_sd_error">--</td></tr>
+              <tr><td>Letzte Antwort</td><td id="conn_last">--</td></tr>
+              <tr><td>Abfragen dieses Telefons</td><td id="conn_count">--</td></tr>
+            </tbody>
+          </table>
+
+          <h3>Fehlerprotokoll</h3>
+          <div class="buttons">
+            <button data-log="/error_log">Anzeigen</button>
+            <button data-log="/error_log?previous=1" class="secondary">Vorherige</button>
+            <button data-clear="/clear_error_log" class="secondary">Leeren</button>
+          </div>
+          <pre id="pre_error_log" hidden></pre>
+
+          <h3>Gesundheitsspur</h3>
+          <div class="buttons">
+            <button data-log="/health_log">Anzeigen</button>
+            <button data-clear="/clear_health_log" class="secondary">Leeren</button>
+          </div>
+          <pre id="pre_health_log" hidden></pre>
+
+          <h3>Verbindung dieses Telefons</h3>
+          <pre id="conn_log">keine Störungen notiert</pre>
+          <div class="buttons">
+            <button id="connClear" class="secondary">Leeren</button>
+            <button id="remountSd" class="secondary">SD neu einbinden</button>
+            <button id="resetCrashes" class="secondary">Absturzzähler löschen</button>
+          </div>
+        </details>
       </div>
     </div>
 
-    <!-- JS auslagern -->
-    <script src="/html/app.js"></script>
+    <script src="app.js"></script>
   </body>
 </html>

@@ -1,190 +1,129 @@
-# Energy Logger Project
+# Energy-Logger
 
-An energy logger based on **Shelly Plus Plug S Gen 2** and **QT-Py ESP32-S3** running CircuitPython Rev. 10.  
-It records energy consumption data, stores it on an SD card, and serves it via a local **PWA/web interface with HTTPS**.  
-The application is **offline-capable** and can be installed as an app.
+*Deutsche Fassung: [README-DE.md](README-DE.md)*
 
----
-
-## Project Overview
-
-- Measures **energy consumption** of a device via Shelly Plus Plug S.
-- **QT-Py ESP32-S3** collects the data and stores it on an SD card (`/sd`).
-- Local display shows real-time measurements.
-- Serves a **PWA / website** (`index.html`, `app.js`, `manifest.json`, `service-worker.js`, `style.css`) via its own access point (`QT-LOGGER`).
-- **New: HTTPS support with self-signed certificate**  
-  → required for **PWA & Service Worker on iOS**.
-- SD card mounted at `/sd`, web files under `/html`.
+Energy logger built from a **Shelly Plus Plug S (Gen 2)** and an **Adafruit QT Py
+ESP32-S3** running CircuitPython 10. It reads power and energy from the Shelly,
+logs them to an SD card, shows them on a small OLED and serves an installable,
+offline-capable web app (PWA) over **HTTPS** on its own Wi-Fi access point.
 
 ---
+
+## How it works
+
+```
+ Phone ──Wi-Fi──▶ Energy-Logger AP (192.168.4.1, HTTPS)
+                        │
+                 QT Py ESP32-S3 ──Wi-Fi (station)──▶ Shelly AP (192.168.33.1)
+                        │
+                  SD card · OLED · NeoPixel
+```
+
+- The QT Py joins the Shelly's own access point and polls
+  `Shelly.GetStatus` every `poll_interval` seconds (**never faster than 5 s**,
+  the Shelly gets into trouble otherwise).
+- At the same time it runs its own access point. The phone connects to it and
+  opens `https://192.168.4.1`.
+- Every reading is appended to `energy_log.csv` on the SD card. On a month change
+  the file is renamed to `energy_log_YYYY-MM.csv` and a new one is started.
 
 ## Hardware
 
-- **Shelly Plus Plug S Generation 2** – measures energy consumption.
-- **QT-Py ESP32-S3 (Adafruit)** – main controller.
-- **SD card module** – for local storage.
-- **I²C display** – shows energy and system status.
-- **Optional:** Neopixel LED for status indication.
+| Part | Connection |
+|---|---|
+| Adafruit QT Py ESP32-S3 (4 MB flash, 2 MB PSRAM) | — |
+| SD card breakout | SPI (SCK/MOSI/MISO), CS on **A1** |
+| OLED SSD1306 128×64 | STEMMA QT / I²C, address **0x3D** |
+| Write-protect jumper (optional) | **A0** to GND, see `boot.py` |
+| Shelly Plus Plug S Gen 2 | in AP mode, factory IP 192.168.33.1 |
 
-**Network:**
+## Files on the device (CIRCUITPY)
 
-- Shelly provides an access point (AP).
-- QT-Py connects to Shelly in STA mode while also running its own AP (`QT-LOGGER`).
-- **iOS Wi-Fi Shortcut:** Opens Wi-Fi settings directly (`prefs:root=WIFI`). Only works on iPhone/iPad.
-- PWA files (`index.html`, `app.js`, `style.css`, `manifest.json`, `service-worker.js`) are served via this AP.
-- **HTTPS runs on port 443** with certificate (`server.crt`) and key (`server.key`).
+```
+CIRCUITPY/
+├─ code.py            main program
+├─ boot.py            write-protect jumper on A0
+├─ safemode.py        logs the reason of a safe-mode crash and resets
+├─ config.py          device settings (no credentials)
+├─ secrets.py         Wi-Fi credentials — copy from secrets_example.py
+├─ server.crt         TLS certificate for 192.168.4.1
+├─ server.key         TLS key
+├─ html/              the web app (index.html, app.js, style.css, …)
+└─ lib/               libraries from the Adafruit bundle
+```
 
----
+`secrets.py`, `server.crt`, `server.key` and `lib/` are **not** in the repository.
 
-## Software
+### Libraries
 
-- **CircuitPython Rev. 10**
-- Libraries: `adafruit_requests`, `adafruit_ntp`, `adafruit_minimqtt`, `adafruit_sdcard`, `displayio`, etc.
-- **PWA:** local control and visualization.
-- **Service Worker:** offline cache, app-installable.
-- **Logging:** CSV and JSON files on SD card.
-- **MQTT (optional):** publish data to an MQTT broker.
+From the CircuitPython 10.x bundle: `adafruit_httpserver`, `adafruit_requests`,
+`adafruit_connection_manager`, `adafruit_sdcard`, `adafruit_bus_device`,
+`adafruit_displayio_ssd1306`, `adafruit_display_text`, `asyncio`, `adafruit_ticks`,
+`neopixel`, `adafruit_pixelbuf`.
 
-**Features:**
+Use **`adafruit_sdcard`**, not `sdcardio` — on the sister project SolarLoader
+`sdcardio` caused write errors and duplicate lines in the field.
 
-- Shelly Toggle: switch Shelly on/off.
-- Logging Toggle: enable/disable SD logging.
-- Real-time measurements: Power (W), Energy (Wh), IPs, RTC status, SD card status.
-- Polling: continuous update of values on PWA.
-- RTC synchronization via NTP or Shelly.
-- **Fallback time when no real-time clock is available** → default: `2026-01-01`.
+## Setup
 
----
+1. Flash CircuitPython 10.x for the QT Py ESP32-S3.
+2. Copy `lib/`, `html/`, `code.py`, `boot.py`, `safemode.py`, `config.py` to CIRCUITPY.
+3. Copy `secrets_example.py` to `secrets.py` and fill in your values.
+   `ap_password` needs 8 to 63 characters.
+4. Put `server.crt` and `server.key` for `192.168.4.1` on the device. Without them
+   the logger falls back to plain HTTP on port 80 — that works in a browser, but
+   the PWA cannot be installed on iOS.
+5. Insert the SD card, connect the Shelly, power up.
+6. Join the Wi-Fi `Energy-Logger` on your phone and open `https://192.168.4.1`.
 
-## SD Logging (Updated)
+The clock has no battery and no internet. The app sends the phone's time
+automatically when it opens and the logger reports an unset clock. If the Shelly
+has a time itself, it is used as well.
 
-The SD logging logic now uses a **queue** to prevent data loss:
+## Web app
 
-- Buffer up to 100 entries
-- Automatic retry on SD errors
-- Remount SD card on failures
-- Drop counter on queue overflow
-- LED feedback for status
+- Live power, energy, voltage/current, switch the plug on and off
+- SD card, logging and clock status; pause/resume logging; set the clock by hand
+- Download of the data log per month (in pieces, can be aborted)
+- **Diagnose**: software version of device and UI, uptime, crashes, memory,
+  loop time, server errors, error log, health log, connection log of the phone
 
-### Logging Status Values:
+The app polls the logger every 5 s while you look at it, every 30 s after
+3 minutes without touching it, and not at all in the background.
 
-| Value     | Meaning                   |
-| --------- | ------------------------- |
-| `off`     | Logging disabled          |
-| `idle`    | Queue empty               |
-| `writing` | Current write in progress |
-| `ok`      | Last write successful     |
-| `error`   | SD problem                |
+## Robustness
 
-These status values are also shown on the display and in the web interface.
+Taken over from the SolarLoader:
 
----
+- **Watchdog** (60 s) — a hung program resets itself
+- **Crash detection** in NVM, every boot is written to `error_log.txt`
+- **`safemode.py`** writes the safe-mode reason to the SD card and resets
+  (at most 3 times in a row)
+- **Health log** `health_log.csv`: memory, largest block, CPU temperature, loop
+  time, slowest Shelly request and SD write — every 5 minutes
+- SD card is **remounted automatically**, a write reported as failed is never
+  written twice, logs are rotated instead of deleted
 
-## Service Worker & HTTPS
+## Development
 
-To make the PWA work on iOS:
+```bash
+python3 sim/run_sim.py          # runs the real code.py on the Mac, see sim/README.md
+python3 sim/tests/dst.py        # quick unit test
+python3 tools/stamp.py --check  # version in code.py, app.js and service worker agree
+python3 tools/stamp.py 2.1 "short description"   # before a release, then commit
+```
 
-- Service Worker is served at `/service-worker.js`
-- Correct MIME type: `application/javascript`
-- **HTTPS mandatory**, running on port 443
-- Offline-capable
-- App-installable
+Code, identifiers and comments are in English; the user interface is German.
 
-**Note:** Browser warnings due to self-signed certificate are normal.
+## iOS shortcut
 
----
+The "WLAN wechseln" button opens an iOS shortcut named `ChangeWIFI`, see
+[ChangeWIFI.md](ChangeWIFI.md).
 
-## Installation / Deployment
+## License
 
-1. Flash QT-Py with CircuitPython Rev. 10.
-2. Copy libraries to `lib/`.
-3. Insert SD card.
-4. Connect hardware (display, Neopixel, SD card).
-5. Copy web files to `/html`.
-6. Create `secrets_shelly.py` with Wi-Fi, Shelly, and optional MQTT credentials.
-7. **Save HTTPS certificate & key (`server.crt`, `server.key`)**
-8. Connect power.
-9. Access the PWA via AP `QT-LOGGER`: https://192.168.4.1
+MIT, see [LICENSE.txt](LICENSE.txt). Shelly is a product of Shelly Group
+(formerly Allterco Robotics); this project is not affiliated with it.
 
----
-
-## Operation
-
-- QT-Py automatically connects to the Shelly.
-- Local AP `QT-LOGGER` provides access to the PWA.
-- Logging can be toggled via the PWA.
-- Energy and status data are updated regularly and optionally logged to the SD card.
-- iOS shortcut opens Wi-Fi settings directly for easier network switching.
-- Service Worker enables **offline usage**.
-
----
-
-## Icons / Graphics
-
-- Project icons (`icon-521.png`, `icon-192.png`, etc.) were created by the project author using AI assistance (ChatGPT) and custom design instructions.
-- No third-party rights are infringed. Icons may be used, published, and distributed within the project.
-- License: **MIT / Public Domain** for icons, provided no third-party logos or trademarks are violated.
-
----
-
-## Deployment Checklist
-
-- [ ] Code reviewed for cleanliness
-- [ ] Unnecessary logs removed
-- [ ] Comments placed meaningfully
-- [ ] Formatting consistent
-- [ ] SD card prepared and mounted
-- [ ] HTML/JS/CSS in `/html` folder
-- [ ] `secrets_shelly.py` correctly configured
-- [ ] Wi-Fi and Shelly connection tested
-- [ ] **HTTPS working**
-- [ ] **Service Worker active**
-- [ ] PWA tested in browser
-- [ ] Logging functionality verified
-- [ ] Shelly Toggle tested
-- [ ] iOS Wi-Fi shortcut tested
-- [ ] MQTT optionally tested
-
----
-
-## License & Legal Notes
-
-1. **Hardware Licenses:**
-
-   - Shelly: property of Allterco Robotics. Usage according to their policies.
-   - QT-Py: Adafruit hardware. No license restrictions for personal projects.
-
-2. **Software Licenses:**
-
-   - CircuitPython and libraries: according to license (mostly MIT or BSD).
-   - Own code: MIT License recommended.
-
-3. **ChatGPT / AI Assistance:**
-
-   - Parts of the documentation, icons, and code helpers were created with ChatGPT.
-   - Responsibility for integration, operation, and correctness lies with the user.
-
-4. **Disclaimer:**  
-   **The creator of this project assumes no responsibility, liability, compensation, or any obligations** for damages to hardware, software, or other losses.  
-   **Use of this project is entirely at the user's own risk.**
-
----
-
-## Notes for Contributors
-
-- Submit contributions via Pull Requests.
-- Format code cleanly, remove unnecessary logs.
-- Place comments meaningfully.
-- Discuss new features with the maintainer beforehand.
-- Do not remove license notices or disclaimers.
-- Test all changes for working Shelly communication, logging, iOS shortcut, PWA delivery, and icons.
-- **When editing the Service Worker:** users may need to reinstall the PWA.
-- **HTTPS is required for PWA on iOS.**
-
----
-
-## Credits
-
-- **Adafruit:** QT-Py, libraries, Neopixels, displays
-- **Allterco Robotics:** Shelly hardware
-- **OpenAI ChatGPT:** support for documentation, icons, and code
+**Disclaimer:** use at your own risk. The author accepts no liability for damage
+to hardware, software or anything else.

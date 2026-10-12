@@ -1,97 +1,98 @@
-const CACHE_NAME = "shelly-logger-v5.9"; // Version erhöht für Update
-const FILES_TO_CACHE = [
-  "/html/index.html",
-  "/html/style.css",
-  "/html/app.js",
-  "/html/manifest.json",
-  "/html/icon-180.png",
-  "/html/icon-192.png",
-  "/html/icon-512.png",
-  "/html/offline.html",
-  "/service-worker.js"
+/**
+ * Energy-Logger service worker
+ *
+ * Strategy (taken from the SolarLoader):
+ *  - anything unknown   → not touched, the browser fetches it directly
+ *  - images / icons     → cache first (they never change)
+ *  - HTML / CSS / JS    → stale-while-revalidate: served from cache at once,
+ *                         refreshed in the background.
+ *
+ * CACHE_NAME depends on the build and is set by tools/stamp.py, so a new UI
+ * replaces the old cache on the next start instead of showing the old page.
+ *
+ * Only GET requests for the known static files go through the cache. API
+ * calls (status.json, toggle_*, logs) always reach the device, so the app
+ * sees a real network error when the logger is unreachable.
+ */
+
+const CACHE_NAME = "energy-logger-v2.0-b16";   // set by tools/stamp.py
+const CACHE_IMGS = "energy-logger-imgs-v1";
+
+const STATIC_SHELL = [
+  "./", "index.html", "style.css", "app.js", "manifest.json", "offline.html"
 ];
 
-// ================= INSTALL =================
+const STATIC_IMGS = ["icon-180.png", "icon-192.png", "icon-512.png"];
+
+// Install: load one file after the other, do not overload the ESP32
 self.addEventListener("install", (evt) => {
-  evt.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(FILES_TO_CACHE))
-  );
+  evt.waitUntil((async () => {
+    const shell = await caches.open(CACHE_NAME);
+    const imgs = await caches.open(CACHE_IMGS);
+    for (const f of STATIC_SHELL) {
+      try { await shell.add(f); } catch (e) { console.warn("[SW] shell:", f, e); }
+    }
+    for (const f of STATIC_IMGS) {
+      try { await imgs.add(f); } catch (e) { console.warn("[SW] img:", f, e); }
+    }
+  })());
   self.skipWaiting();
 });
 
-// ================= ACTIVATE =================
+// Activate: delete old caches
 self.addEventListener("activate", (evt) => {
   evt.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(
-        keys.map((key) => key !== CACHE_NAME ? caches.delete(key) : null)
-      )
+    caches.keys().then(keys =>
+      Promise.all(keys
+        .filter(k => k !== CACHE_NAME && k !== CACHE_IMGS)
+        .map(k => caches.delete(k)))
     )
   );
   self.clients.claim();
 });
 
-// ================= FETCH =================
 self.addEventListener("fetch", (evt) => {
   const url = new URL(evt.request.url);
+  if (evt.request.method !== "GET") return;
+  if (url.origin !== self.location.origin) return;
+  if (!isImage(url) && !isShell(url)) return;
 
-  // 1. SPEZIALFALL: Hauptseite (Root oder index.html)
-  // Strategie: Network-First. Wenn offline -> offline.html zeigen.
-  if (url.pathname === "/" || url.pathname.endsWith("index.html") || url.pathname.endsWith("/html/")) {
+  if (isImage(url)) {
     evt.respondWith(
-      fetch(evt.request).catch(async () => {
-        const cache = await caches.open(CACHE_NAME);
-        return await cache.match("/html/offline.html");
-      })
+      caches.match(evt.request).then(cached =>
+        cached || fetch(evt.request).then(res => {
+          const copy = res.clone();
+          caches.open(CACHE_IMGS).then(c => c.put(evt.request, copy));
+          return res;
+        })
+      )
     );
     return;
   }
 
-  // 2. SPEZIALFALL: status.json
-  // Wir lassen diese Anfrage IMMER direkt ans Netzwerk gehen (kein Cache-Fallback),
-  // damit die offline.html zuverlässig merkt, wann der Server wieder da ist.
-  if (url.pathname.endsWith("status.json")) {
-    evt.respondWith(fetch(evt.request));
-    return;
-  }
-
-  // 3. ANDERE API-Aufrufe (POST direkt, GET mit Cache-Update)
-  if (
-    url.pathname.endsWith("toggle_shelly") ||
-    url.pathname.endsWith("toggle_logging") ||
-    url.pathname.endsWith("set_shelly_time")
-  ) {
-    if (evt.request.method === "POST") {
-      evt.respondWith(fetch(evt.request));
-      return;
-    }
-
-    evt.respondWith((async () => {
-      try {
-        const resp = await fetch(evt.request);
-        const cache = await caches.open(CACHE_NAME);
-        cache.put(evt.request, resp.clone());
-        return resp;
-      } catch (err) {
-        const cached = await caches.match(evt.request);
-        if (cached) return cached;
-        return new Response(JSON.stringify({ online: false }), {
-          headers: { "Content-Type": "application/json" }
-        });
-      }
-    })());
-    return;
-  }
-
-  // 4. STATISCHE DATEIEN (CSS, JS, Bilder): Cache-first Strategie
   evt.respondWith(
-    caches.match(evt.request).then((cachedResp) => {
-      return cachedResp || fetch(evt.request).catch(async () => {
-        // Fallback falls auch im Cache nichts ist (z.B. neue Bilder)
-        const offline = await caches.match("/html/offline.html");
-        return offline || new Response("Offline", { status: 503 });
-      });
+    caches.open(CACHE_NAME).then(async (cache) => {
+      const cached = await cache.match(evt.request, { ignoreSearch: true });
+      const network = fetch(evt.request).then(res => {
+        if (res.ok) cache.put(evt.request, res.clone());
+        return res;
+      }).catch(() => null);
+
+      if (cached) {
+        evt.waitUntil(network);   // refresh in the background
+        return cached;
+      }
+      return (await network) || (await cache.match("offline.html")) ||
+             new Response("Offline", { status: 503 });
     })
   );
 });
 
+function isShell(url) {
+  const name = url.pathname.replace(/^.*\//, "");
+  return name === "" || STATIC_SHELL.includes(name);
+}
+
+function isImage(url) {
+  return /\.(png|ico|jpg|jpeg|svg|webp)$/.test(url.pathname);
+}

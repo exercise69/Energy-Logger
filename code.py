@@ -1,688 +1,1009 @@
-# ================= Circuitpython version 10 =================
-# ================= IMPORTS =================
-import time, board, busio, digitalio, storage, adafruit_sdcard, microcontroller, rtc
-import wifi, socketpool, ssl, os, json, neopixel, displayio, asyncio, gc
-import traceback
-try:
-    from secrets_shelly import secrets
-except Exception as e:
-    print("secrets_shelly.py fehlt oder ist defekt:", e)
-    raise
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Uwe Piro
+# https://github.com/exercise69/Energy-Logger
 
-from adafruit_httpserver import Server, Request, Response, ServerStoppedError, FileResponse
-from i2cdisplaybus import I2CDisplayBus
-import adafruit_displayio_ssd1306
-from adafruit_display_text import label
-import terminalio
+# ================= ENERGY-LOGGER — QT Py ESP32-S3 + Shelly Plus Plug S =========
+#
+# Reads power and energy from the Shelly (joining the Shelly's own Wi-Fi in
+# station mode), logs them to the SD card and shows them on the OLED and in a
+# PWA served over HTTPS on the logger's own access point.
+
+# ── Software version ────────────────────────────────────────────
+# Set by tools/stamp.py, not by hand — the script keeps these lines, app.js
+# and the service worker cache name in sync.
+EL_VERSION = "2.0"
+EL_BUILD   = 16
+EL_DATE    = "2026-10-12"
+EL_NOTE    = "Revision 2026-10: lessons from the SolarLoader"
+
+import time, board, digitalio, storage, rtc, os, json, gc, asyncio
+import microcontroller, wifi, socketpool
+import adafruit_sdcard
 import adafruit_requests
-import adafruit_ntp
-import adafruit_minimqtt.adafruit_minimqtt as MQTT
+from adafruit_httpserver import (Server, Request, Response, FileResponse,
+                                 ChunkedResponse, ServerStoppedError)
+from secrets import secrets
+from config import config
 
-# ================= DISPLAY =================
-displayio.release_displays()
-i2c = board.STEMMA_I2C()
-display_bus = I2CDisplayBus(i2c, device_address=0x3D)
-display = adafruit_displayio_ssd1306.SSD1306(display_bus, width=128, height=64)
-
-splash = displayio.Group()
-display.root_group = splash
-color_bitmap = displayio.Bitmap(128, 64, 1)
-color_palette = displayio.Palette(1)
-color_palette[0] = 0x000000
-bg_sprite = displayio.TileGrid(color_bitmap, pixel_shader=color_palette)
-splash.append(bg_sprite)
-
-power_label = label.Label(terminalio.FONT, text="Power: --- W", color=0xFFFFFF, x=0, y=10)
-energy_label = label.Label(terminalio.FONT, text="Energy: --- Wh", color=0xFFFFFF, x=0, y=20)
-shelly_status_label = label.Label(terminalio.FONT, text="Status: ---", color=0xFFFFFF, x=0, y=30)
-mode_label = label.Label(terminalio.FONT, text="Modus: ---", color=0xFFFFFF, x=0, y=40)
-ap_ip_label = label.Label(terminalio.FONT, text="AP IP: ---", color=0xFFFFFF, x=0, y=50)
-sta_ip_label = label.Label(terminalio.FONT, text="STA IP: ---", color=0xFFFFFF, x=0, y=60)
-splash.append(power_label)
-splash.append(energy_label)
-splash.append(shelly_status_label)
-splash.append(mode_label)
-splash.append(ap_ip_label)
-splash.append(sta_ip_label)
-
-# ================= LED =================
+# Short durations use monotonic_ns(): monotonic() is a float and loses
+# millisecond resolution after a bit more than an hour of uptime.
 try:
-    pixel = neopixel.NeoPixel(board.NEOPIXEL, 1, brightness=0.1, auto_write=False)
-except:
-    class DummyPixel:
-        def __setitem__(self, i, c): pass
-        def show(self): pass
-    pixel = DummyPixel()
-
-COLOR_OK   = (0,50,0)
-COLOR_ERR  = (50,0,0)
-COLOR_OFF  = (0,0,0)
-_last_led = None
-
-async def set_status_led(color):
-    global _last_led
-    if color != _last_led:
-        pixel[0] = color
-        pixel.show()
-        _last_led = color
+    _mono_ns = time.monotonic_ns
+except AttributeError:
+    def _mono_ns():
+        return int(time.monotonic() * 1000000000)
 
 # ================= STATE =================
 class Intermediate:
     def __init__(self):
+        # Shelly readings
         self.power = 0.0
         self.energy = 0.0
-        self.shelly_status = "Init..."
-        self.rtc_synced = False
-        self.default_time = False
+        self.output = False
+        self.voltage = None
+        self.current = None
+        self.shelly_temp = None
+        self.shelly_state = "starting"    # starting | searching | ok | offline
+        self.shelly_ok = False
+        self.shelly_last_ok = None        # monotonic time of the last good poll
+        self.shelly_has_time = False
+        self.time_to_shelly_mono = -3600.0
+        self.commands = []                # jobs for the Shelly, see task_shelly
+        # Network
         self.ap_ip = None
         self.sta_ip = None
-        self.mqtt_connected = False
-        self.mqtt_client = None
-        self.requests_session = None
-        self.switch0 = False
-        # neues Flag für Logging
-        self.logging_enabled = secrets.get("logging_enabled", False)
-        self.sd_status = "unmounted"
-        self.sd_writing = None
+        # Clock
+        self.rtc_synced = False
+        self.time_source = ""             # phone | manual | shelly
+        self.time_set_mono = 0.0
+        # SD card and data log
+        self.logging_enabled = config.get("logging_enabled", True)
+        self.sd_status = "unmounted"      # unmounted | ok | error
+        self.sd_writing = "idle"          # idle | writing | ok | error | retry | off
         self.sd_queue_len = 0
         self.sd_queue_dropped = 0
+        self.sd_header_ok = False
+        self.sd_error_txt = ""
+        self.sd_error_at = ""
+        self.sd_error_count = 0
+        # Diagnostics, per health-log window
+        self.loop_dt = 0.0
+        self.loop_dt_max = 0.0
+        self.blocked_at = ""
+        self.shelly_max_s = 0.0
+        self.shelly_errors = 0
+        self.sd_max_s = 0.0
+        self.srv_errors = 0
+        self.srv_error_txt = ""
+        self.cpu_temp = 0.0
+        self.mem_free = 0
+        self.mem_block = 0
 
 intermediate = Intermediate()
-print("status vom intermediate.logging_enabled", intermediate.logging_enabled)
 
-# ================= REBOOT BUTTON =================
+# ================= DISPLAY =================
+# A missing display or a stuck I2C bus must not stop the logger — measuring
+# and logging matter more than the display.
+_lines = []
 try:
-    reboot_switch = digitalio.DigitalInOut(board.A0)
-    reboot_switch.direction = digitalio.Direction.INPUT
-    reboot_switch.pull = digitalio.Pull.UP
-    _prev_switch = reboot_switch.value
-    _last_switch_ts = time.monotonic()
-except:
-    reboot_switch = None
-    _prev_switch = None
-    _last_switch_ts = 0
+    import displayio, terminalio
+    from i2cdisplaybus import I2CDisplayBus
+    import adafruit_displayio_ssd1306
+    from adafruit_display_text import label
+    displayio.release_displays()
+    _display_bus = I2CDisplayBus(board.STEMMA_I2C(),
+                                 device_address=config.get("display_address", 0x3D))
+    display = adafruit_displayio_ssd1306.SSD1306(_display_bus, width=128, height=64)
+    _group = displayio.Group()
+    display.root_group = _group
+    for _i in range(6):
+        _lbl = label.Label(terminalio.FONT, text="", color=0xFFFFFF, x=0, y=5 + _i * 11)
+        _group.append(_lbl)
+        _lines.append(_lbl)
+except Exception as e:
+    print("[DISPLAY] not available:", e)
 
-DEBOUNCE_MS = 50
+def show_line(n, text):
+    """Only touch a label when its text changes — every assignment rebuilds
+    the glyphs and allocates memory."""
+    if n < len(_lines) and _lines[n].text != text:
+        _lines[n].text = text
 
-def check_reboot_switch():
-    global _prev_switch, _last_switch_ts
-    if reboot_switch is None:
-        return
-    val = reboot_switch.value
-    now = time.monotonic()
-    if val != _prev_switch and (now - _last_switch_ts) * 1000 > DEBOUNCE_MS:
-        if not _prev_switch and val:
-            microcontroller.reset()
-        _prev_switch = val
-        _last_switch_ts = now
+# ================= LED =================
+try:
+    import neopixel
+    _pixel = neopixel.NeoPixel(board.NEOPIXEL, 1, brightness=0.1, auto_write=False)
+except Exception:
+    _pixel = None
 
-# ================= SD =================
-SD_PATH = "/sd"
-CSV_FILE = "shelly_energy_log.csv"
-JSON_FILE = "shelly_energy_log.jsonl"
+COLOR_OK  = (0, 50, 0)
+COLOR_ERR = (50, 0, 0)
+COLOR_OFF = (0, 0, 0)
+_led = None
+
+def set_led(color):
+    global _led
+    if _pixel is not None and color != _led:
+        _pixel[0] = color
+        _pixel.show()
+        _led = color
+
+# ================= CLOCK =================
+# The Shelly AP has no internet, so NTP never works. The time comes from the
+# phone (the app sends it on opening while the clock is unset), from manual
+# entry, or from the Shelly if it has a time itself.
+# The RTC runs on Central European local time.
+
+def _cet_offset_hours(utc_epoch):
+    """Offset for Central Europe: 1 = CET (winter), 2 = CEST (summer).
+
+    EU rule: summer time from the last Sunday in March 01:00 UTC to the last
+    Sunday in October 01:00 UTC. Computed here because CircuitPython has no
+    time zone database.
+    """
+    t = time.localtime(utc_epoch)   # no time zone → equals UTC
+    m, d, hh = t.tm_mon, t.tm_mday, t.tm_hour
+    if m < 3 or m > 10:
+        return 1
+    if 3 < m < 10:
+        return 2
+    # March/October: find the date of the last Sunday.
+    # 1970-01-01 was a Thursday; +4 shifts Sunday to 0.
+    days_since_sunday = ((utc_epoch // 86400) + 4) % 7
+    last_sunday       = d - days_since_sunday
+    # The last Sunday of a 31-day month always falls on the 25th–31st.
+    switched = last_sunday >= 25 and not (last_sunday == d and hh < 1)
+    if m == 3:
+        return 2 if switched else 1
+    return 1 if switched else 2
+
+def set_clock(utc_epoch, source):
+    utc_epoch = int(utc_epoch)
+    rtc.RTC().datetime = time.localtime(utc_epoch + _cet_offset_hours(utc_epoch) * 3600)
+    intermediate.rtc_synced = True
+    intermediate.time_source = source
+    intermediate.time_set_mono = time.monotonic()
+    print(f"[CLOCK] set from {source}: {timestamp()}")
+
+def local_to_utc(local_epoch):
+    """Within the hour of a DST switch this can be one hour off — good
+    enough for the Shelly and for manual entry."""
+    return local_epoch - _cet_offset_hours(local_epoch - 3600) * 3600
+
+def timestamp():
+    """YYYY-MM-DD hh:mm:ss — or the uptime while the clock is unset."""
+    if not intermediate.rtc_synced:
+        return f"T+{time.monotonic():.0f}s"
+    t = rtc.RTC().datetime
+    return (f"{t.tm_year}-{t.tm_mon:02d}-{t.tm_mday:02d} "
+            f"{t.tm_hour:02d}:{t.tm_min:02d}:{t.tm_sec:02d}")
+
+# ================= SD CARD =================
+SD_PATH          = "/sd"
+CSV_FILE         = "energy_log.csv"
+CSV_MONTH_PREFIX = "energy_log_"          # energy_log_2026-10.csv
+CSV_HEADER       = "time,power_w,energy_wh,output\n"
+ERROR_LOG_FILE   = "error_log.txt"
+ERROR_LOG_OLD    = "error_log.1.txt"
+MAX_ERROR_LOG    = 32768                  # then rotate one generation
+HEALTH_LOG_FILE  = "health_log.csv"
+MAX_HEALTH_LOG   = 98304                  # 96 KB ~ 4 days at 5 minutes
+HEALTH_HEADER    = ("time,free_b,block_b,cpu_c,loop_s,loop_max_s,blocked_at,"
+                    "shelly_max_s,shelly_errors,sd_max_s,srv_errors,"
+                    "status_requests,uptime_h,sd\n")
+MAX_QUEUE        = 100
+
+# NVM bytes survive every reset
+NVM_IDX_FLAG     = 0     # 0xAB = booted but not yet 60 s healthy
+NVM_IDX_CRASHES  = 1     # crash counter (0–255)
+NVM_IDX_SAFEMODE = 2     # consecutive self-heals from safemode.py
+NVM_FLAG_BOOT    = 0xAB
+
 sd_log_queue = []
+_spi     = None
+_sd_card = None
+_sd_cs   = None
 
-def mount_sd(intermediate):
+def _sd_release():
+    """Release the CS pin. Without this every second mount fails with "A1 in use"."""
+    global _sd_card, _sd_cs
+    _sd_card = None
+    if _sd_cs is not None:
+        try: _sd_cs.deinit()
+        except Exception: pass
+        _sd_cs = None
+
+def _sd_error(where, e):
+    """Remember an SD error. Only the change from ok to error goes into the
+    error log — the log lives on the card itself."""
+    was_ok = intermediate.sd_status == "ok"
+    intermediate.sd_error_txt = f"{where}: {e}"
+    intermediate.sd_error_at = timestamp()
+    intermediate.sd_error_count += 1
+    if was_ok:
+        log_error(f"SD ERROR {intermediate.sd_error_txt}")
+
+def mount_sd():
+    # adafruit_sdcard, not sdcardio: on the SolarLoader sdcardio caused write
+    # errors and duplicate lines in the field (09/2026).
+    global _spi, _sd_card, _sd_cs
     try:
-        cs_pin = getattr(board, secrets.get("sd_cs_pin", "A1"))
-        spi = busio.SPI(board.SCK, board.MOSI, board.MISO)
-        cs = digitalio.DigitalInOut(cs_pin)
-        sd = adafruit_sdcard.SDCard(spi, cs)
-        storage.mount(storage.VfsFat(sd), SD_PATH)
-        print("SD gemountet")
-        intermediate.sd_status = "ok"
-        return True
+        storage.umount(SD_PATH)
+    except Exception:
+        pass
+    _sd_release()
+    try:
+        # The SPI bus is created once. It used to be created on every mount —
+        # from the second attempt on that failed with "SCK in use", so the
+        # automatic remount could never succeed.
+        if _spi is None:
+            _spi = board.SPI()
+        _sd_cs = digitalio.DigitalInOut(getattr(board, config.get("sd_cs_pin", "A1")))
+        _sd_card = adafruit_sdcard.SDCard(_spi, _sd_cs)
+        storage.mount(storage.VfsFat(_sd_card), SD_PATH)
     except Exception as e:
-        print("SD Fehler:", e)
-        intermediate.sd_status = f"mounting SD failed {e}"
+        print("[SD] mount failed:", e)
+        _sd_error("mount", e)
+        intermediate.sd_status = "error"
+        _sd_release()
         return False
+    intermediate.sd_status = "ok"
+    intermediate.sd_header_ok = False
+    print("[SD] mounted")
+    return True
 
-# ================= SD-LOGGING =================
-MAX_QUEUE = 100
+def log_error(msg):
+    print(f"[ERR] {msg}")
+    try:
+        path = f"{SD_PATH}/{ERROR_LOG_FILE}"
+        try:
+            too_big = os.stat(path)[6] > MAX_ERROR_LOG
+        except OSError:
+            too_big = False
+        if too_big:
+            # Rotate instead of delete, otherwise a chatty condition wipes
+            # the trace of a crash.
+            try:
+                try: os.remove(f"{SD_PATH}/{ERROR_LOG_OLD}")
+                except OSError: pass
+                os.rename(path, f"{SD_PATH}/{ERROR_LOG_OLD}")
+            except Exception as e:
+                print(f"[ERR] rotation failed ({e}) — clearing log")
+                try: os.remove(path)
+                except OSError: pass
+        with open(path, "a") as f:
+            f.write(f"{timestamp()}  {msg}\n")
+    except Exception:
+        pass
 
-def enqueue_log(intermediate):
-    # new logging_enabled logic
+def enqueue_log():
     if not intermediate.logging_enabled:
-        return   # <<< Task beendet sich sofort
-
-    ts = time.time()
-    csv_line = f"{ts},{intermediate.power},{intermediate.energy}\n"
-    json_line = json.dumps({
-        "ts": ts,
-        "power": intermediate.power,
-        "energy": intermediate.energy
-    }) + "\n"
-
-    sd_log_queue.append((csv_line, json_line))
-
-    # Overflow-Handling
+        return
+    sd_log_queue.append(f"{timestamp()},{intermediate.power:.1f},"
+                        f"{intermediate.energy:.1f},{int(intermediate.output)}\n")
     if len(sd_log_queue) > MAX_QUEUE:
-        overflow_count = len(sd_log_queue) - MAX_QUEUE
-        intermediate.sd_queue_dropped += overflow_count
-        sd_log_queue[:] = sd_log_queue[overflow_count:]
-        print(f"SD Log Queue voll → {overflow_count} älteste Einträge verworfen")
-
-    # Länge IMMER aktualisieren
+        drop = len(sd_log_queue) - MAX_QUEUE
+        del sd_log_queue[:drop]
+        intermediate.sd_queue_dropped += drop
     intermediate.sd_queue_len = len(sd_log_queue)
 
-    print("Enqueued SD Log:", csv_line.strip())
+_log_month = None   # YYYY-MM of the lines in energy_log.csv, None = not known yet
 
+def _is_month(s):
+    # "2026-10" — lines written before the clock was set start with "T+123s"
+    return len(s) == 7 and s[:2] == "20" and s[4] == "-"
 
+def _check_month(csv_path, csv_line):
+    """On a month change, move energy_log.csv aside and start a new file.
 
-# ================= SD WRITER TASK ================= (newer version)
-# verhindert verloren Einträge bei SD-Ausfall, started SD wiederholt neu
-async def task_sd_writer(intermediate):
-    
-    RETRY_DELAY = 2
-    IDLE_THRESHOLD = 500  # Anzahl Schleifen, bevor "idle" gesetzt wird
-    idle_counter = 0
-    
+    The month comes from the line's own timestamp, not from the clock. On the
+    first call after boot the month of the first dated line is read — the file
+    may be left over from the previous month.
+    """
+    global _log_month
+    month = csv_line[:7]
+    if not _is_month(month):
+        return
+    if _log_month is None:
+        _log_month = month
+        try:
+            with open(csv_path, "r") as f:
+                f.readline()                       # header
+                for _ in range(50):
+                    line = f.readline()
+                    if not line:
+                        break
+                    if _is_month(line[:7]):
+                        _log_month = line[:7]
+                        break
+        except OSError:
+            pass
+    if _log_month == month:
+        return
+    old = f"{SD_PATH}/{CSV_MONTH_PREFIX}{_log_month}.csv"
+    n = 2
+    while True:                                    # never overwrite
+        try:
+            os.stat(old)
+        except OSError:
+            break
+        old = f"{SD_PATH}/{CSV_MONTH_PREFIX}{_log_month}_{n}.csv"
+        n += 1
+    try:
+        os.rename(csv_path, old)
+        intermediate.sd_header_ok = False
+        log_error(f"DATA LOG rotated: {CSV_FILE} -> {old.split('/')[-1]}")
+    except Exception as e:
+        # Better keep writing to the old file than lose lines
+        print(f"[SD] rotation failed: {e}")
+        return
+    _log_month = month
+
+async def task_sd_writer():
+    RETRY_DELAY = 5
     while True:
-        await asyncio.sleep(0.01)
-
         if not intermediate.logging_enabled:
             intermediate.sd_writing = "off"
-            idle_counter = 0
+            await asyncio.sleep(0.5)
             continue
-
         if not sd_log_queue:
-            idle_counter += 1
-            if idle_counter >= IDLE_THRESHOLD:
-                intermediate.sd_writing = "idle"
-            continue
-        else:
-            idle_counter = 0  # Queue wieder gefüllt, Counter zurücksetzen
-
-
-        try:
-            os.listdir(SD_PATH)
-            intermediate.sd_status = "ok"
-        except OSError:
-            intermediate.sd_status = "SD nicht verfügbar"
-            intermediate.sd_writing = "error"
-            await set_status_led(COLOR_ERR)
-            mount_sd(intermediate)
-            await asyncio.sleep(RETRY_DELAY)
+            intermediate.sd_writing = "idle"
+            await asyncio.sleep(0.5)
             continue
 
-        # Wir WERDEN jetzt schreiben -> Status setzen
+        # Remount after every error. "error" used to stick until somebody
+        # restarted the device.
+        if intermediate.sd_status != "ok":
+            intermediate.sd_writing = "retry"
+            if not mount_sd():
+                await asyncio.sleep(RETRY_DELAY)
+                continue
+
         intermediate.sd_writing = "writing"
-
-        csv_line, json_line = sd_log_queue[0]
-
+        csv_path = f"{SD_PATH}/{CSV_FILE}"
+        csv_line = sd_log_queue[0]
+        size_before = 1 << 30            # unknown: never count as written
         try:
-            with open(f"{SD_PATH}/{CSV_FILE}", "a") as f:
+            _check_month(csv_path, csv_line)
+            if not intermediate.sd_header_ok:
+                try:
+                    new_file = os.stat(csv_path)[6] == 0
+                except OSError:
+                    new_file = True
+                if new_file:
+                    with open(csv_path, "w") as f:
+                        f.write(CSV_HEADER)
+                intermediate.sd_header_ok = True
+            # Remember the size: if the driver reports an error although the
+            # line is already on the card, it must not be written twice.
+            try:
+                size_before = os.stat(csv_path)[6]
+            except OSError:
+                size_before = 0
+            t0 = _mono_ns()
+            with open(csv_path, "a") as f:
                 f.write(csv_line)
-                f.flush()
-            with open(f"{SD_PATH}/{JSON_FILE}", "a") as f:
-                f.write(json_line)
-                f.flush()
-
+            dt = (_mono_ns() - t0) / 1000000000.0
+            if dt > intermediate.sd_max_s:
+                intermediate.sd_max_s = dt
             sd_log_queue.pop(0)
-
+            intermediate.sd_queue_len = len(sd_log_queue)
             intermediate.sd_writing = "ok"
-            await set_status_led(COLOR_OK)
-
         except Exception as e:
-            print("SD Log Schreibfehler:", e)
+            print("[SD] write error:", e)
+            _sd_error(f"writing {CSV_FILE}", e)
             intermediate.sd_status = "error"
             intermediate.sd_writing = "error"
-            print(f"SD Fehler: {e}")
-            await set_status_led(COLOR_ERR)
+            try:
+                if (sd_log_queue and
+                        os.stat(csv_path)[6] >= size_before + len(csv_line.encode())):
+                    sd_log_queue.pop(0)          # already on the card
+                    intermediate.sd_queue_len = len(sd_log_queue)
+            except Exception:
+                pass
             await asyncio.sleep(RETRY_DELAY)
+            continue
+        await asyncio.sleep(0.05)
 
+# ================= HEALTH LOG =================
+_boot_mono = time.monotonic()
+_status_requests = 0
+_health_header_checked = False
 
-
-# ================= RTC =================
-async def sync_rtc(intermediate):
-    try:
-        pool_ntp = socketpool.SocketPool(wifi.radio)
-        ntp = adafruit_ntp.NTP(pool_ntp)
-        rtc.RTC().datetime = ntp.datetime
-        intermediate.rtc_synced = True
-        print("RTC via NTP gesetzt")
-        return True
-    except Exception as e:
-        print("NTP nicht verfügbar:", e)
-        intermediate.rtc_synced = False
-        default_time = time.struct_time((2026,1,1,0,0,0,-1,-1,-1))
-        rtc.RTC().datetime = default_time
-        print("RTC auf Default-Zeit 2026-01-01 gesetzt")
-        return False
-
-def set_rtc_from_shelly(data, intermediate):
-    try:
-        sys = data.get("sys", {})
-        unixtime = sys.get("unixtime")
-        offset = sys.get("utc_offset", 0)
-        if not unixtime:
-            print("Shelly liefert keine Zeit")
-            return False
-        rtc.RTC().datetime = time.localtime(unixtime + offset*3600)
-        intermediate.rtc_synced = True
-        print("RTC von Shelly gesetzt")
-        return True
-    except Exception as e:
-        print("RTC von Shelly Fehler:", e)
-        return False
-
-def now_iso():
-    t = time.localtime()
-    return f"{t.tm_year:04}-{t.tm_mon:02}-{t.tm_mday:02}T{t.tm_hour:02}:{t.tm_min:02}:{t.tm_sec:02}"
-
-# ================= MQTT =================
-MQTT_ENABLED = secrets.get("mqtt_enabled", False)
-MQTT_HARDWARE_SWITCH = False
-MQTT_BROKER = secrets.get("mqtt_broker")
-MQTT_PORT = secrets.get("mqtt_port", 1883)
-MQTT_USER = secrets.get("mqtt_username")
-MQTT_PASS = secrets.get("mqtt_password")
-MQTT_TOPIC = secrets.get("mqtt_topic", "shelly/energy")
-
-async def mqtt_connect(pool, intermediate):
-    if not (MQTT_ENABLED and MQTT_HARDWARE_SWITCH and MQTT_BROKER):
-        return
-    try:
-        intermediate.mqtt_client = MQTT.MQTT(
-            broker=MQTT_BROKER,
-            port=MQTT_PORT,
-            username=MQTT_USER,
-            password=MQTT_PASS,
-            socket_pool=pool,
-            ssl_context=ssl.create_default_context(),
-        )
-        intermediate.mqtt_client.connect()
-        intermediate.mqtt_connected = True
-    except Exception as e:
-        print("MQTT Fehler:", e)
-
-async def mqtt_publish(intermediate):
-    if intermediate.mqtt_client and intermediate.mqtt_connected:
+def _largest_block():
+    """Largest allocatable contiguous block. gc.mem_free() only reports the
+    sum — a TLS handshake fails on fragmentation, not on the total."""
+    for size in (32768, 16384, 8192, 4096, 2048, 1024):
         try:
-            intermediate.mqtt_client.publish(MQTT_TOPIC, json.dumps({
-                "timestamp": now_iso(),
-                "power_w": intermediate.power,
-                "energy_wh": intermediate.energy
-            }))
-        except Exception as e:
-            print("MQTT Publish Fehler:", e)
-            intermediate.mqtt_connected = False
+            _probe = bytearray(size)
+            del _probe
+            return size
+        except MemoryError:
+            continue
+    return 0
+
+def log_health(free, block, uptime_h):
+    global _health_header_checked
+    try:
+        path = f"{SD_PATH}/{HEALTH_LOG_FILE}"
+        new_file = True
+        try:
+            size = os.stat(path)[6]
+            new_file = size == 0
+            if size > MAX_HEALTH_LOG:
+                os.remove(path)
+                new_file = True
+        except OSError:
+            pass
+        # If columns were added, the old file no longer matches the header.
+        if not new_file and not _health_header_checked:
+            with open(path, "r") as f:
+                if f.readline() != HEALTH_HEADER:
+                    os.remove(path)
+                    new_file = True
+        _health_header_checked = True
+        i = intermediate
+        with open(path, "a") as f:
+            if new_file:
+                f.write(HEALTH_HEADER)
+            f.write(f"{timestamp()},{free},{block},{i.cpu_temp:.1f},"
+                    f"{i.loop_dt:.2f},{i.loop_dt_max:.2f},{i.blocked_at},"
+                    f"{i.shelly_max_s:.2f},{i.shelly_errors},{i.sd_max_s:.3f},"
+                    f"{i.srv_errors},{_status_requests},{uptime_h:.1f},{i.sd_status}\n")
+    except Exception as e:
+        print(f"[HEALTH] write error: {e}")
+
+async def task_health():
+    """Clean up every minute, write one line of operating state every
+    health_interval seconds. A hard crash gives no warning as an error —
+    without this trace nothing would be logged before an outage."""
+    interval = config.get("health_interval", 300)
+    next_line = time.monotonic() + interval
+    while True:
+        await asyncio.sleep(60)
+        gc.collect()
+        free = gc.mem_free()
+        if free < 20000:
+            log_error(f"LOW RAM: {free} bytes free after GC")
+        if time.monotonic() < next_line:
+            continue
+        next_line = time.monotonic() + interval
+
+        i = intermediate
+        block = _largest_block()
+        try:
+            i.cpu_temp = microcontroller.cpu.temperature
+        except Exception:
+            i.cpu_temp = 0.0
+        uptime_h = (time.monotonic() - _boot_mono) / 3600.0
+        i.mem_free, i.mem_block = free, block
+        log_health(free, block, uptime_h)
+
+        if block < 8192:
+            log_error(f"MEMORY FRAGMENTED  largest block {block}B with {free}B free")
+        if i.loop_dt_max > 6.0:
+            log_error(f"SLOW LOOP  {i.loop_dt_max:.1f}s at {i.blocked_at}  "
+                      f"(Shelly max {i.shelly_max_s:.1f}s, SD max {i.sd_max_s:.3f}s)")
+        if i.srv_errors:
+            log_error(f"SERVER ERRORS  {i.srv_errors} in {interval}s  "
+                      f"(last: {i.srv_error_txt})")
+
+        # Close the window
+        i.loop_dt_max = 0.0
+        i.blocked_at = ""
+        i.shelly_max_s = 0.0
+        i.shelly_errors = 0
+        i.sd_max_s = 0.0
+        i.srv_errors = 0
+
+async def task_healthy():
+    """After 60 s of running, the boot counts as successful."""
+    await asyncio.sleep(60)
+    try:
+        microcontroller.nvm[NVM_IDX_FLAG] = 0x00
+        microcontroller.nvm[NVM_IDX_SAFEMODE] = 0   # safemode.py starts counting again
+    except Exception:
+        pass
+    print("[BOOT] healthy after 60 s")
+
+def _log_boot():
+    """Every boot goes into the error log, a detected crash with its trace."""
+    try:
+        reason = str(microcontroller.cpu.reset_reason)
+    except Exception:
+        reason = "unknown"
+    try:
+        nvm = microcontroller.nvm
+        expected = "POWER_ON" in reason or "RESET_PIN" in reason
+        if nvm[NVM_IDX_FLAG] == NVM_FLAG_BOOT and not expected:
+            nvm[NVM_IDX_CRASHES] = min(nvm[NVM_IDX_CRASHES] + 1, 255)
+            log_error(f"CRASH DETECTED  reset={reason}  crashes={nvm[NVM_IDX_CRASHES]}")
+            try:
+                with open("/boot_out.txt", "r") as f:
+                    log_error("boot_out.txt:\n" + f.read())
+            except Exception:
+                pass
+        log_error(f"BOOT  v{EL_VERSION} b{EL_BUILD}  reset={reason}  "
+                  f"crashes={nvm[NVM_IDX_CRASHES]}  selfheal={nvm[NVM_IDX_SAFEMODE]}")
+        nvm[NVM_IDX_FLAG] = NVM_FLAG_BOOT
+    except Exception as e:
+        print("[BOOT] NVM error:", e)
 
 # ================= SHELLY =================
-SHELLY_SSID = secrets["shelly_ap_ssid"]
+SHELLY_SSID     = secrets["shelly_ap_ssid"]
 SHELLY_PASSWORD = secrets["shelly_ap_password"]
-SHELLY_IP = secrets["shelly_ip"]
-SHELLY_URL = f"http://{SHELLY_IP}/rpc/Shelly.GetStatus"
-POLL_INTERVAL = secrets.get("poll_interval", 10)
+SHELLY_BASE     = f"http://{config['shelly_ip']}/rpc/"
+# Polling faster than every 5 s causes trouble on the Shelly — this holds even
+# if config.py says less, and for the poll right after a switch command.
+POLL_INTERVAL   = max(5, config.get("poll_interval", 10))
+POLL_MIN_GAP    = 5      # a status poll never follows any request faster than this
+COMMAND_MIN_GAP = 1      # commands (toggle, time) keep at least this distance
+SHELLY_TIMEOUT  = 3      # seconds; on its own AP the Shelly answers in milliseconds
+SHELLY_TIME_RESYNC = 6 * 3600
 
-async def connect_sta_to_shelly(intermediate):
-    print("==> Starte Verbindungs-Loop zu Shelly...")
-    while True:
-        try:
-            if wifi.radio.connected and str(wifi.radio.ap_info.ssid) == SHELLY_SSID:
-                intermediate.sta_ip = str(wifi.radio.ipv4_address)
-                return True
+pool     = socketpool.SocketPool(wifi.radio)     # the only pool in the program
+_session = adafruit_requests.Session(pool)       # the Shelly speaks plain HTTP
+_last_request = -60.0
 
-            networks = wifi.radio.start_scanning_networks()
-            found = any(net.ssid == SHELLY_SSID for net in networks)
-            wifi.radio.stop_scanning_networks()
+def _wifi_ok():
+    """Connected AND with an address — on the SolarLoader `connected` alone
+    reported 0.0.0.0 as fine."""
+    if not wifi.radio.connected:
+        return False
+    ip = wifi.radio.ipv4_address
+    return ip is not None and str(ip) != "0.0.0.0"
 
-            if found:
-                print(f"Shelly gefunden! Verbinde...")
-                wifi.radio.connect(SHELLY_SSID, SHELLY_PASSWORD)
+def _shelly_rpc(method):
+    """One RPC call. The response is always closed — previously every poll
+    left a socket open until none were left."""
+    global _last_request
+    _last_request = time.monotonic()
+    t0 = _mono_ns()
+    try:
+        with _session.get(SHELLY_BASE + method, timeout=SHELLY_TIMEOUT) as r:
+            if r.status_code != 200:
+                raise OSError(f"HTTP {r.status_code}")
+            return r.json()
+    finally:
+        dt = (_mono_ns() - t0) / 1000000000.0
+        if dt > intermediate.shelly_max_s:
+            intermediate.shelly_max_s = dt
 
-                for _ in range(50):
-                    if wifi.radio.ipv4_address is not None:
-                        intermediate.sta_ip = str(wifi.radio.ipv4_address)
-                        print("STA erfolgreich verbunden:", intermediate.sta_ip)
-                        return True
-                    await asyncio.sleep(0.1)
-            else:
-                print(f"Shelly '{SHELLY_SSID}' nicht in Reichweite...")
-
-        except Exception as e:
-            print(f"STA Fehler: {e}")
-
+async def _connect_to_shelly():
+    delay = 5
+    while not _wifi_ok():
         intermediate.sta_ip = None
-        await asyncio.sleep(5)
-
-async def fetch_shelly(intermediate, pool):
-    if intermediate.requests_session is None:
-        intermediate.requests_session = adafruit_requests.Session(pool, ssl.create_default_context())
-
-    ntp_ok = await sync_rtc(intermediate)
-    await connect_sta_to_shelly(intermediate)
-    await asyncio.sleep(2)
-
-    while True:
-        if not wifi.radio.connected:
-            await connect_sta_to_shelly(intermediate)
-
-        success = False
-
+        intermediate.shelly_state = "searching"
         try:
-            r = intermediate.requests_session.get(SHELLY_URL, timeout=10)
-            if r.status_code == 200:
-                data = r.json()
-                s0 = data.get("switch:0", {})
+            wifi.radio.connect(SHELLY_SSID, SHELLY_PASSWORD, timeout=10)
+        except Exception as e:
+            print(f"[WIFI] {SHELLY_SSID}: {e}")
+        if _wifi_ok():
+            break
+        await asyncio.sleep(delay)
+        delay = min(delay * 2, 60)
+    intermediate.sta_ip = str(wifi.radio.ipv4_address)
+    log_error(f"SHELLY WIFI connected  ip={intermediate.sta_ip}")
 
-                intermediate.power = s0.get("apower", 0.0)
-                intermediate.energy = s0.get("aenergy", {}).get("total", 0.0)
-                intermediate.switch0 = s0.get("output", False)
-                intermediate.shelly_status = "Shelly OK"
-                await set_status_led(COLOR_OK)
+def _poll_shelly():
+    i = intermediate
+    try:
+        d = _shelly_rpc("Shelly.GetStatus")
+    except Exception as e:
+        i.shelly_errors += 1
+        if i.shelly_ok:
+            log_error(f"SHELLY unreachable: {e}")
+        i.shelly_ok = False
+        i.shelly_state = "offline"
+        set_led(COLOR_ERR)
+        return False
 
-                enqueue_log(intermediate)
-                if not ntp_ok:
-                    set_rtc_from_shelly(data, intermediate)
-                await mqtt_publish(intermediate)
-                success = True
-            else:
-                intermediate.shelly_status = f"Shelly Fehler {r.status_code}"
-                await set_status_led(COLOR_ERR)
+    s0 = d.get("switch:0") or {}
+    i.power = float(s0.get("apower") or 0.0)
+    i.energy = float((s0.get("aenergy") or {}).get("total") or 0.0)
+    i.output = bool(s0.get("output", False))
+    i.voltage = s0.get("voltage")
+    i.current = s0.get("current")
+    i.shelly_temp = (s0.get("temperature") or {}).get("tC")
+    if not i.shelly_ok and i.shelly_last_ok is not None:
+        log_error("SHELLY reachable again")
+    i.shelly_ok = True
+    i.shelly_last_ok = time.monotonic()
+    i.shelly_state = "ok"
+    set_led(COLOR_OK)
 
-        except OSError as e:
-            intermediate.shelly_status = "Shelly offline"
-            await set_status_led(COLOR_ERR)
-            print("Shelly Fetch Fehler, retry in 5s:", e)
+    # unixtime is UTC and null while the Shelly has no time itself.
+    # (utc_offset is in seconds; the old code multiplied it by 3600 again.)
+    unixtime = (d.get("sys") or {}).get("unixtime")
+    i.shelly_has_time = bool(unixtime)
+    if unixtime:
+        if not i.rtc_synced or (i.time_source == "shelly" and
+                time.monotonic() - i.time_set_mono > SHELLY_TIME_RESYNC):
+            set_clock(unixtime, "shelly")
+    elif (i.rtc_synced and "time_to_shelly" not in i.commands and
+            time.monotonic() - i.time_to_shelly_mono > 3600):
+        # At most once an hour — if the Shelly does not take the time, it
+        # should not get a command after every poll.
+        i.commands.append("time_to_shelly")
 
-        await asyncio.sleep(POLL_INTERVAL if success else 5)
-        gc.collect()
+    enqueue_log()
+    return True
 
-# ================= HTTP SERVER =================
-SSID = secrets.get("ap_ssid", "QT-LOGGER")
-PASSWORD = secrets.get("ap_password", "meinpasswort")
+def _run_command(cmd):
+    i = intermediate
+    try:
+        if cmd == "toggle":
+            # The reply tells the previous state — no extra poll needed
+            d = _shelly_rpc("Switch.Toggle?id=0")
+            i.output = not d.get("was_on", i.output)
+        elif cmd == "time_to_shelly":
+            i.time_to_shelly_mono = time.monotonic()
+            _shelly_rpc(f"Sys.SetTime?unixtime={int(local_to_utc(time.time()))}")
+            print("[CLOCK] time sent to the Shelly")
+    except Exception as e:
+        log_error(f"SHELLY COMMAND {cmd} failed: {e}")
 
-pool = socketpool.SocketPool(wifi.radio)
+async def task_shelly():
+    """The only place that talks to the Shelly. The web UI and the clock put
+    jobs into intermediate.commands; so two requests never share the session
+    at the same time, and no web request waits for the Shelly."""
+    i = intermediate
+    next_poll = 0.0
+    while True:
+        if not _wifi_ok():
+            if i.sta_ip is not None:
+                log_error("SHELLY WIFI lost")
+            i.shelly_ok = False
+            set_led(COLOR_ERR)
+            await _connect_to_shelly()
+            next_poll = 0.0
 
-server = Server(
-    pool, root_path="/html", https=True, certfile="server.crt", keyfile="server.key",debug=True,)
-    #pool, root_path="/html", https=True, certfile="cert.pem", keyfile="key.pem",debug=True,)
-# server = Server(pool, debug=False)
+        now = time.monotonic()
+        if i.commands:
+            if now - _last_request >= COMMAND_MIN_GAP:
+                _run_command(i.commands.pop(0))
+        elif now >= next_poll and now - _last_request >= POLL_MIN_GAP:
+            ok = _poll_shelly()
+            next_poll = time.monotonic() + (POLL_INTERVAL if ok else POLL_MIN_GAP)
+        await asyncio.sleep(0.2)
+
+# ================= WEB SERVER =================
+AP_SSID     = secrets.get("ap_ssid", "Energy-Logger")
+AP_PASSWORD = secrets["ap_password"]      # deliberately without a default
+
+def _exists(path):
+    try:
+        os.stat(path)
+        return True
+    except OSError:
+        return False
+
+# HTTPS is required for the PWA on iOS. Without a certificate the server still
+# runs — plain HTTP on port 80, with an entry in the error log.
+HTTPS = _exists("/server.crt") and _exists("/server.key")
+server = Server(pool, root_path="/html", https=HTTPS,
+                certfile="server.crt", keyfile="server.key", debug=False)
 
 def start_server():
     try:
         server.stop()
-    except:
+    except Exception:
         pass
-    time.sleep(0.1)
-    if intermediate.ap_ip:
-        server.start(str(intermediate.ap_ip), 443)
+    server.start(str(intermediate.ap_ip), 443 if HTTPS else 80)
 
+def _json(request, data, status=200):
+    return Response(request, json.dumps(data), content_type="application/json",
+                    status=status)
 
-# ================= 1. JSON DATA =================
-# muss an erster Stelle stehen!
-@server.route("/status.json")
-def status_json(request: Request):
-    # Vorbereitung für die Anzeige
-    gc.collect()
-
-    mode = "Offline"
-    if intermediate.ap_ip and intermediate.sta_ip:
-        mode = "AP+STA"
-    elif intermediate.ap_ip:
-        mode = "AP"
-    elif intermediate.sta_ip:
-        mode = "STA"
-
-    try:
-        os.listdir(SD_PATH)
-        intermediate.sd_status = "ok"
-    except OSError:
-        intermediate.sd_status = "Nicht verfügbar"
-
-    t = rtc.RTC().datetime
-    intermediate.default_time = not intermediate.rtc_synced or t.tm_year < 2001
-
-    # Das Daten-Objekt zusammenbauen
-    data = {
-        "mode": mode,
-        "power": intermediate.power,
-        "energy": intermediate.energy,
-        "switch0": getattr(intermediate, "switch0", False),
-        "shelly_status": intermediate.shelly_status,  #Shelly status
-        "ap_ip": intermediate.ap_ip,
-        "sta_ip": intermediate.sta_ip,
-        "rtc_synced": intermediate.rtc_synced,
-        "default_time": intermediate.default_time,
-        "sd_status": intermediate.sd_status,
-        "sd_writing": intermediate.sd_writing,
-        "mqtt_enabled": MQTT_ENABLED,
-        "mqtt_hw_switch": MQTT_HARDWARE_SWITCH,
-        "mqtt_connected": intermediate.mqtt_connected,
-        "logging_enabled": getattr(intermediate, "logging_enabled", False),
-        "sd_queue_len": intermediate.sd_queue_len,
-        "sd_queue_dropped": intermediate.sd_queue_dropped,
-    }
-
-    # WICHTIG: Erst in String umwandeln, dann absenden
-    json_str = json.dumps(data)
-    return Response(request, json_str, content_type="application/json")
-
-
-# ================= 2. ROOT PATH =================
 @server.route("/")
-def index(request: Request):
+def route_index(request: Request):
     return FileResponse(request, "index.html", root_path="/html")
 
+@server.route("/ping")
+def route_ping(request: Request):
+    return Response(request, "pong")
 
-# ================= SERVICE WORKER =================
-@server.route("/service-worker.js")
-def sw(request: Request):
-    return FileResponse(
-        request,
-        "service-worker.js",  # Datei liegt im /html-Ordner
-        root_path="/html",
-        content_type="application/javascript"  # wichtig!
-    )
-
-
-# ================= 3. STATIC FILES =================
-@server.route("/html/<filename>")
-def static_file(request: Request, filename: str):
-    return FileResponse(request, filename, root_path="/html")
-
-
-# ================= 4. FALLBACK =================
-@server.route("/<filename>")
-def static_file_root(request: Request, filename: str):
-    return FileResponse(request, filename, root_path="/html")
-
-
-# ================= SET SHELLY TIME =================
-async def set_shelly_time_async(unixtime, intermediate):
+@server.route("/status.json")
+def route_status(request: Request):
+    global _status_requests
+    _status_requests += 1
+    i = intermediate
     try:
-        shelly_url = f"http://{SHELLY_IP}/rpc/Sys.SetTime?unixtime={unixtime}"
-        if intermediate.requests_session is None:
-            intermediate.requests_session = adafruit_requests.Session(pool, ssl.create_default_context())
-        r = intermediate.requests_session.get(shelly_url, timeout=5)
-        if r.status_code == 200:
-            print(f"[Async] Shelly Zeit erfolgreich gesetzt: {unixtime}")
-        else:
-            print(f"[Async] Shelly Fehler {r.status_code}")
-    except Exception as e:
-        print("[Async] Fehler beim Setzen der Shelly-Zeit:", e)
-    finally:
-        gc.collect()
-
-@server.route("/set_shelly_time", methods=["POST"])
-def set_time(request: Request):
-    gc.collect()
+        log_size = os.stat(f"{SD_PATH}/{CSV_FILE}")[6]
+    except OSError:
+        log_size = 0
     try:
-        raw_dt = request.form_data.get("dt")
-        if not raw_dt:
-            return Response(request, "Keine Daten gesendet", status=400)
-        raw_dt = raw_dt.replace("%3A", ":")
-        if "T" not in raw_dt:
-            return Response(request, "Ungültiges Format", status=400)
-        date_part, time_part = raw_dt.split("T")
-        try:
-            y, m, d = map(int, date_part.split("-"))
-            hh, mm = map(int, time_part.split(":"))
-        except Exception:
-            return Response(request, "Ungültige Datumsangaben", status=400)
-        new_tm = time.struct_time((y, m, d, hh, mm, 0, 0, -1, -1))
-        rtc.RTC().datetime = new_tm
-        intermediate.rtc_synced = True
-        unixtime = int(time.mktime(new_tm))
-        if unixtime < 0:
-            return Response(request, "Ungültige Zeit (vor 1970)", status=400)
-        asyncio.create_task(set_shelly_time_async(unixtime, intermediate))
-        return Response(request, "OK")
-    except Exception as e:
-        print("Fehler set_time:", e)
-        return Response(request, f"Fehler: {e}", status=500)
-    finally:
-        gc.collect()
+        crashes = microcontroller.nvm[NVM_IDX_CRASHES]
+    except Exception:
+        crashes = 0
+    return _json(request, {
+        "version": EL_VERSION, "build": EL_BUILD, "date": EL_DATE, "note": EL_NOTE,
+        "power": i.power, "energy": i.energy, "output": i.output,
+        "voltage": i.voltage, "current": i.current, "shelly_temp": i.shelly_temp,
+        "shelly_state": i.shelly_state, "shelly_ok": i.shelly_ok,
+        "shelly_age_s": (None if i.shelly_last_ok is None
+                         else round(time.monotonic() - i.shelly_last_ok)),
+        "poll_interval": POLL_INTERVAL,
+        "ap_ssid": AP_SSID, "ap_ip": i.ap_ip, "sta_ip": i.sta_ip, "https": HTTPS,
+        "rtc_synced": i.rtc_synced, "time": timestamp(), "time_source": i.time_source,
+        "shelly_has_time": i.shelly_has_time,
+        "logging_enabled": i.logging_enabled, "sd_status": i.sd_status,
+        "sd_writing": i.sd_writing, "sd_queue_len": i.sd_queue_len,
+        "sd_queue_dropped": i.sd_queue_dropped, "sd_error_txt": i.sd_error_txt,
+        "sd_error_at": i.sd_error_at, "sd_error_count": i.sd_error_count,
+        "sd_log_size": log_size,
+        "crash_count": crashes, "mem_free": i.mem_free, "mem_block": i.mem_block,
+        "cpu_temp": i.cpu_temp, "uptime_h": (time.monotonic() - _boot_mono) / 3600.0,
+        "loop_dt": i.loop_dt, "loop_dt_max": i.loop_dt_max, "srv_errors": i.srv_errors,
+        "status_requests": _status_requests,
+    })
 
-
-# ================= TOGGLE SHELLY =================
 @server.route("/toggle_shelly", methods=["POST"])
-def toggle_shelly(request: Request):
-    try:
-        url = f"http://{SHELLY_IP}/rpc/Switch.Toggle?id=0"
-        # print("DEBUG: Shelly URL:", url)
+def route_toggle_shelly(request: Request):
+    # Only queue it: the Shelly task switches on its next pass (<0.2 s).
+    if "toggle" not in intermediate.commands:
+        intermediate.commands.append("toggle")
+    return _json(request, {"ok": True})
 
-        # Session anlegen, falls noch nicht vorhanden
-        if intermediate.requests_session is None:
-            intermediate.requests_session = adafruit_requests.Session(
-                socketpool.SocketPool(wifi.radio),
-                ssl.create_default_context()
-            )
-
-        # Shelly Toggle senden und Response sauber schließen
-        with intermediate.requests_session.get(url, timeout=5) as r:
-            # print("DEBUG: Shelly Response Code:", r.status_code)
-            if r.status_code == 200:
-                # Status im Intermediate direkt aktualisieren, falls möglich
-                intermediate.switch0 = not intermediate.switch0
-                return Response(request, "OK")
-            else:
-                return Response(request, f"Fehler Shelly {r.status_code}", status=500)
-
-    except Exception as e:
-        print("Fehler toggle_shelly:", e)
-        return Response(request, f"Fehler: {e}", status=500)
-
-    finally:
-        gc.collect()
-
-
-# ================= TOGGLE LOGGING =================
 @server.route("/toggle_logging", methods=["POST"])
-def toggle_logging(request: Request):
+def route_toggle_logging(request: Request):
+    intermediate.logging_enabled = not intermediate.logging_enabled
+    log_error(f"LOGGING {'on' if intermediate.logging_enabled else 'off'}")
+    return _json(request, {"ok": True, "logging_enabled": intermediate.logging_enabled})
+
+@server.route("/set_time", methods=["POST"])
+def route_set_time(request: Request):
+    """epoch=<UTC seconds> (app, automatic) or dt=YYYY-MM-DDThh:mm (manual, local time)."""
+    form = request.form_data
     try:
-        # Logging-Flag umschalten
-        intermediate.logging_enabled = not getattr(intermediate, "logging_enabled", False)
-        status_text = "aktiviert" if intermediate.logging_enabled else "deaktiviert"
-        print(f"Logging {status_text}")
-
-        return Response(request, f"Logging {status_text}")
-
+        if form.get("epoch"):
+            utc = int(form.get("epoch"))
+            source = "phone"
+        else:
+            date_part, time_part = form.get("dt", "").replace("%3A", ":").split("T")
+            y, m, d = (int(x) for x in date_part.split("-"))
+            hh, mm = (int(x) for x in time_part.split(":")[:2])
+            utc = local_to_utc(time.mktime(time.struct_time((y, m, d, hh, mm, 0, 0, -1, -1))))
+            source = "manual"
+        if utc < 1735689600:                       # before 2025: certainly wrong
+            raise ValueError("time is before 2025")
     except Exception as e:
-        print("Fehler toggle_logging:", e)
-        return Response(request, f"Fehler: {e}", status=500)
+        return _json(request, {"ok": False, "error": str(e)}, status=400)
+    set_clock(utc, source)
+    if "time_to_shelly" not in intermediate.commands:
+        intermediate.commands.append("time_to_shelly")
+    return _json(request, {"ok": True, "time": timestamp()})
 
-    finally:
-        gc.collect()
+# ── Logs ────────────────────────────────────────────────────────
+STREAM_CHUNK = 65536     # at most this much per request, the app fetches the rest
 
+def _log_file(name):
+    """Only energy_log.csv and its monthly files — never an arbitrary path."""
+    if not name or name == CSV_FILE:
+        return CSV_FILE
+    if (name.startswith(CSV_MONTH_PREFIX) and name.endswith(".csv")
+            and "/" not in name and ".." not in name):
+        return name
+    return None
 
-# ================= TASKS =================
-async def task_reboot_switch():
+@server.route("/log_files")
+def route_log_files(request: Request):
+    files = []
+    try:
+        for name in sorted(os.listdir(SD_PATH)):
+            if _log_file(name) == name:
+                try:
+                    files.append({"file": name, "size": os.stat(f"{SD_PATH}/{name}")[6]})
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return _json(request, files)
+
+@server.route("/log_stream")
+def route_log_stream(request: Request):
+    """One piece of a data log file. A 10 MB file in one go would block the
+    server for minutes — Shelly polling and the watchdog would stall."""
+    p = request.query_params
+    name = _log_file(p.get("file"))
+    if name is None:
+        return Response(request, "unknown file", status=400)
+    path = f"{SD_PATH}/{name}"
+    try:
+        size = os.stat(path)[6]
+        start = max(0, min(int(p.get("offset", 0)), size))
+        end = min(size, start + STREAM_CHUNK, int(p.get("end", size)))
+    except (OSError, ValueError):
+        return Response(request, "", status=404)
+
+    def chunks():
+        with open(path, "rb") as f:
+            f.seek(start)
+            remaining = end - start
+            while remaining > 0:
+                b = f.read(min(1024, remaining))
+                if not b:
+                    break
+                remaining -= len(b)
+                try:
+                    microcontroller.watchdog.feed()
+                except Exception:
+                    pass
+                yield b
+
+    return ChunkedResponse(request, chunks, content_type="text/plain; charset=utf-8")
+
+def _serve_log(request, name, empty_text):
+    # FileResponse streams the file in small pieces instead of reading it
+    # into memory in one string.
+    if not _exists(f"{SD_PATH}/{name}"):
+        return Response(request, empty_text)
+    return FileResponse(request, name, root_path=SD_PATH,
+                        content_type="text/plain; charset=utf-8")
+
+@server.route("/error_log")
+def route_error_log(request: Request):
+    if request.query_params.get("previous"):
+        return _serve_log(request, ERROR_LOG_OLD, "(no previous generation)")
+    return _serve_log(request, ERROR_LOG_FILE, "(no error log)")
+
+@server.route("/health_log")
+def route_health_log(request: Request):
+    return _serve_log(request, HEALTH_LOG_FILE, "(no health log)")
+
+@server.route("/clear_error_log", methods=["POST"])
+def route_clear_error_log(request: Request):
+    for name in (ERROR_LOG_FILE, ERROR_LOG_OLD):
+        try: os.remove(f"{SD_PATH}/{name}")
+        except OSError: pass
+    return _json(request, {"ok": True})
+
+@server.route("/clear_health_log", methods=["POST"])
+def route_clear_health_log(request: Request):
+    try: os.remove(f"{SD_PATH}/{HEALTH_LOG_FILE}")
+    except OSError: pass
+    return _json(request, {"ok": True})
+
+@server.route("/remount_sd", methods=["POST"])
+def route_remount_sd(request: Request):
+    ok = mount_sd()
+    return _json(request, {"ok": ok, "sd_status": intermediate.sd_status})
+
+@server.route("/reset_crashes", methods=["POST"])
+def route_reset_crashes(request: Request):
+    try:
+        microcontroller.nvm[NVM_IDX_CRASHES] = 0
+    except Exception:
+        pass
+    return _json(request, {"ok": True})
+
+async def task_server():
+    i = intermediate
+    last = time.monotonic()
     while True:
-        check_reboot_switch()
+        try:
+            server.poll()
+        except ServerStoppedError:
+            start_server()
+        except MemoryError as e:
+            # No cleanup helps reliably — save the trace, restart.
+            log_error(f"MEMORYERROR in server: {e}  free={gc.mem_free()}  -> reset")
+            microcontroller.reset()
+        except Exception as e:
+            # Counted instead of swallowed: an error in the TLS handshake
+            # would otherwise look like nothing. Keep the text once per window.
+            i.srv_errors += 1
+            if i.srv_errors == 1:
+                i.srv_error_txt = str(e)
+        try:
+            microcontroller.watchdog.feed()
+        except Exception:
+            pass
+
+        # How long was the loop blocked? The health log reports above 6 s.
+        now = time.monotonic()
+        dt = now - last
+        last = now
+        i.loop_dt = i.loop_dt * 0.98 + dt * 0.02
+        if dt > i.loop_dt_max:
+            i.loop_dt_max = dt
+            i.blocked_at = timestamp()
         await asyncio.sleep(0.05)
 
+# ================= DISPLAY & SWITCH =================
+# OLED text is user interface, so it stays German.
+_SHELLY_TEXT = {"starting": "Start...", "searching": "suche Shelly",
+                "ok": "Shelly OK", "offline": "Shelly offline"}
+
 async def task_display():
+    i = intermediate
+    show_line(0, "Energy-Logger")
+    show_line(1, f"v{EL_VERSION} Build {EL_BUILD}")
+    await asyncio.sleep(3)
     while True:
-        mode = "Offline"
-        if intermediate.ap_ip and intermediate.sta_ip:
-            mode = "AP+STA"
-        elif intermediate.ap_ip:
-            mode = "AP"
-        elif intermediate.sta_ip:
-            mode = "STA"
-
-        power_label.text = f"Power: {intermediate.power:.1f} W"
-        energy_label.text = f"Energy: {intermediate.energy:.1f} Wh"
-        shelly_status_label.text = f"{intermediate.shelly_status}"
-        mode_label.text = f"Modus: {mode}"
-        ap_ip_label.text = f"AP IP: {intermediate.ap_ip or '-'}"
-        sta_ip_label.text = f"STA IP: {intermediate.sta_ip or '-'}"
-
+        show_line(0, f"P: {i.power:.1f} W")
+        show_line(1, f"E: {i.energy:.1f} Wh")
+        show_line(2, _SHELLY_TEXT.get(i.shelly_state, i.shelly_state) +
+                  (" EIN" if i.output and i.shelly_ok else ""))
+        show_line(3, f"SD: {i.sd_status}" + ("" if i.logging_enabled else " (Log aus)"))
+        show_line(4, f"AP: {i.ap_ip or '-'}")
+        if i.rtc_synced:
+            t = rtc.RTC().datetime
+            show_line(5, f"{t.tm_mday:02d}.{t.tm_mon:02d}. {t.tm_hour:02d}:{t.tm_min:02d}")
+        else:
+            show_line(5, "Uhr nicht gestellt")
         await asyncio.sleep(0.5)
 
-
-# ================= SERVER POLL (updated) =================
-async def task_server():
+async def task_write_switch():
+    """A0–GND jumper removed -> reset, so boot.py hands CIRCUITPY back to the
+    computer (see boot.py)."""
+    try:
+        switch = digitalio.DigitalInOut(board.A0)
+        switch.direction = digitalio.Direction.INPUT
+        switch.pull = digitalio.Pull.UP
+    except Exception as e:
+        print("[A0] not available:", e)
+        return
+    prev = switch.value
     while True:
-        try:
-            # Hauptserver-Polling
-            server.poll()
-
-        # ===== Bekanntes Szenario: Server gestoppt =====
-        except ServerStoppedError:
-            print("Server stopped → restarting…")
-            start_server()
-
-        # ===== Netzwerk-/Socketfehler =====
-        except OSError as e:
-            print("WiFi/Socket error in server.poll():", e)
-            # Optional: Server neu starten
-            start_server()
-
-        # ===== RuntimeError von CircuitPython/WiFi =====
-        except RuntimeError as e:
-            print("RuntimeError in server.poll():", e)
-            start_server()
-
-        # ===== Speicherprobleme =====
-        except MemoryError as e:
-            print("MemoryError → rebooting:", e)
-            microcontroller.reset()  # ESP32-S3 sofort neu starten
-
-        # ===== Unerwartete Fehler =====
-        except Exception as e:
-            print("UNEXPECTED server error:", e)
-            try:
-                traceback.print_exception(e)
-            except Exception:
-                # Falls traceback Probleme macht
-                print(repr(e))
-            # Task läuft weiter
-
-        finally:
-            gc.collect()
-            # Garantiertes Sleep, um Event-Loop nicht zu blockieren
-            await asyncio.sleep(0.05)
-
+        val = switch.value
+        if val and not prev:
+            await asyncio.sleep(0.05)          # debounce
+            if switch.value:
+                microcontroller.reset()
+        prev = val
+        await asyncio.sleep(0.05)
 
 # ================= MAIN =================
 async def main():
-    gc.collect()
+    set_led(COLOR_OFF)
+    mount_sd()
+    _log_boot()
+    if not HTTPS:
+        log_error("NO CERTIFICATE  server.crt/server.key missing -> HTTP on port 80, "
+                  "the PWA cannot be installed on iOS this way")
 
-    mount_sd(intermediate)
-
-    wifi.radio.stop_ap()
-    await asyncio.sleep(0.5)
-
-    wifi.radio.start_ap(ssid=SSID, password=PASSWORD)
-    await asyncio.sleep(2)
-
+    try:
+        wifi.radio.stop_ap()
+    except Exception:
+        pass
+    try:
+        wifi.radio.start_ap(ssid=AP_SSID, password=AP_PASSWORD)
+    except Exception as e:
+        log_error(f"AP START failed ({e}) — ap_password in secrets.py needs 8 to 63 characters")
+        raise
     intermediate.ap_ip = str(wifi.radio.ipv4_address_ap)
-    print("AP aktiv:", intermediate.ap_ip)
-
+    print("[AP]", AP_SSID, intermediate.ap_ip)
     start_server()
 
-    tasks = [
-        fetch_shelly(intermediate, pool),
-        task_reboot_switch(),
-        task_display(),
+    # From here on the server loop must run at least once a minute,
+    # otherwise the watchdog resets the device.
+    try:
+        from watchdog import WatchDogMode
+        microcontroller.watchdog.timeout = 60
+        microcontroller.watchdog.mode = WatchDogMode.RESET
+    except Exception as e:
+        print("[WATCHDOG] not available:", e)
+
+    await asyncio.gather(
+        task_shelly(),
+        task_sd_writer(),
         task_server(),
-        task_sd_writer(intermediate)
-    ]
+        task_display(),
+        task_write_switch(),
+        task_health(),
+        task_healthy(),
+    )
 
-    await asyncio.gather(*tasks)
-
-asyncio.run(main())
-
+# An exception in any task tears down the whole program through gather().
+# Without this block the reason would only appear on the serial console.
+try:
+    asyncio.run(main())
+except Exception as _abort:
+    try:
+        import traceback
+        _trace = "".join(traceback.format_exception(_abort))
+    except Exception:
+        _trace = repr(_abort)
+    log_error("MAIN LOOP ABORTED\n" + _trace)
+    raise          # the watchdog resets the device

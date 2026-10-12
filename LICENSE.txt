@@ -1,6 +1,6 @@
 # MIT License
 
-Copyright (c) 2025 exercise69 (https://github.com/exercise69)
+Copyright (c) 2025-2026 Uwe Piro (https://github.com/exercise69)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -16,7 +16,7 @@ copies or substantial portions of the Software.
 
 ## Special Notes
 
-- **Icons / Graphics:** Project icons (e.g., `icon-521.png`, `icon-192.png`) were created by the project author with assistance from AI (ChatGPT) and original design instructions. They are included under the MIT/Public Domain license, provided no third-party logos or trademarks are violated.  
+- **Icons / Graphics:** Project icons (e.g., `icon-512.png`, `icon-192.png`) were created by the project author with assistance from AI (ChatGPT) and original design instructions. They are included under the MIT/Public Domain license, provided no third-party logos or trademarks are violated.  
 - **ChatGPT / AI Assistance:** Parts of documentation, code snippets, and icons were created with ChatGPT. Responsibility for integration, operation, and correctness lies solely with the user.  
 
 ---

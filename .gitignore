@@ -1,0 +1,35 @@
+# Credentials and TLS keys — never commit
+secrets.py
+secrets_shelly.py
+*.pem
+*.key
+*.crt
+
+# CircuitPython runtime output
+boot_out.txt
+settings.toml
+
+# macOS
+._*
+.fseventsd/
+.Trashes
+.metadata_never_index
+.DS_Store
+.vscode/
+
+# Libraries come from the Adafruit bundle (see README)
+lib/
+
+# SD card contents
+sd/
+
+# Old snapshots from before git
+_olderVersions/
+
+# Simulator runtime data
+sim/sd/
+sim/device/
+__pycache__/
+
+# Claude Code
+.claude/
