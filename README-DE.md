@@ -120,6 +120,7 @@ Aus dem SolarLoader übernommen:
 ```bash
 python3 sim/run_sim.py          # das echte code.py auf dem Mac, siehe sim/README.md
 python3 sim/tests/dst.py        # schneller Einzeltest
+# auf dem Gerät: tools/sd_debug.py nach CIRCUITPY, Ctrl-C, dann `import sd_debug`
 python3 tools/stamp.py --check  # Version in code.py, app.js und Service Worker gleich?
 python3 tools/stamp.py 2.1 "kurze Beschreibung"   # vor einer Auslieferung, dann committen
 ```
