@@ -103,6 +103,10 @@ boot.py         → CIRCUITPY/boot.py
 code.py         → CIRCUITPY/code.py       (zum Schluss)
 ```
 
+**Ordner `sd` prüfen:** Auf CIRCUITPY muss ein leerer Ordner `sd` liegen — der
+Einhängepunkt der SD-Karte. Fehlt er, im Finder neu anlegen. Ohne ihn meldet das
+Gerät „folder 'sd' missing on CIRCUITPY“ und schreibt nichts.
+
 Jede Dateiänderung startet `code.py` neu. Die letzte soll auf den vollständigen
 Satz treffen, deshalb `code.py` zuletzt.
 

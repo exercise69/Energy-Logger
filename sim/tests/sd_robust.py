@@ -58,4 +58,14 @@ try:
           "new energy_log.csv starts with header and only December lines")
 finally:
     stop(p)
+
+print("CIRCUITPY without the folder 'sd'")
+p = start("--reset-sd", "--no-mountpoint")
+try:
+    s = wait_for(lambda s: s["sd_error_count"] > 0, 20)
+    check(s["sd_status"] == "error", "status error")
+    check("folder 'sd' missing" in s["sd_error_txt"], f"clear message ({s['sd_error_txt']})")
+    check(s["shelly_ok"], "measuring continues")
+finally:
+    stop(p)
 finish()

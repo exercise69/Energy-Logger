@@ -164,6 +164,10 @@ def _sdcard(spi, cs):
 
 
 def _mount(vfs, path):
+    import os
+    # CircuitPython 10: the mount point must exist on CIRCUITPY
+    if not os.path.isdir(os.path.join(fs.device_root(), path.strip("/"))):
+        raise RuntimeError("Mount point directory missing")
     fs.sd_mounted = True
 
 

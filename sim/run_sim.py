@@ -46,6 +46,8 @@ def parse_args():
     p.add_argument("--shelly-time", action="store_true", help="Shelly already has a time")
     p.add_argument("--no-sd", action="store_true", help="start without an SD card")
     p.add_argument("--reset-sd", action="store_true", help="empty the stand-in SD card")
+    p.add_argument("--no-mountpoint", action="store_true",
+                   help="CIRCUITPY without the empty folder 'sd' (CircuitPython 10 needs it)")
     p.add_argument("--display", default="ssd1306",
                    choices=("ssd1306", "ssd1327", "none", "unknown"),
                    help="display on the I2C bus (status byte as on the hardware)")
@@ -76,6 +78,13 @@ def main():
             if os.path.isfile(p):
                 os.remove(p)
         print("[SIM] stand-in SD card emptied")
+
+    mountpoint = os.path.join(fs.device_root(), "sd")
+    if args.no_mountpoint:
+        if os.path.isdir(mountpoint):
+            os.rmdir(mountpoint)
+    else:
+        os.makedirs(mountpoint, exist_ok=True)
 
     plug = shelly.Shelly(load_w=args.load, has_time=args.shelly_time)
     state = {

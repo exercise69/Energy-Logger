@@ -32,7 +32,7 @@ offline-capable web app (PWA) over **HTTPS** on its own Wi-Fi access point.
 | Part | Connection |
 |---|---|
 | Adafruit QT Py ESP32-S3 (4 MB flash, 2 MB PSRAM) | — |
-| SD card breakout | SPI (SCK/MOSI/MISO), CS on **A1** |
+| SD card: Adafruit Micro SD Card BFF (5683) or other 3.3 V breakout | SPI (SCK/MOSI/MISO), CS on **A1** (BFF: solder jumper A1, default is TX) |
 | OLED SSD1306 128×64 **or** SSD1327 128×128 | STEMMA QT / I²C, 0x3D or 0x3C — detected automatically |
 | Write-protect jumper (optional) | **A0** to GND, see `boot.py` |
 | Shelly Plus Plug S Gen 2 | in AP mode, factory IP 192.168.33.1 |
@@ -48,6 +48,7 @@ CIRCUITPY/
 ├─ secrets.py         Wi-Fi credentials — copy from secrets_example.py
 ├─ server.crt         TLS certificate for 192.168.4.1
 ├─ server.key         TLS key
+├─ sd/                empty folder — mount point of the SD card (required!)
 ├─ html/              the web app (index.html, app.js, style.css, …)
 └─ lib/               libraries from the Adafruit bundle
 ```
@@ -67,7 +68,8 @@ Use **`adafruit_sdcard`**, not `sdcardio` — on the sister project SolarLoader
 ## Setup
 
 1. Flash CircuitPython 10.x for the QT Py ESP32-S3.
-2. Copy `lib/`, `html/`, `code.py`, `boot.py`, `safemode.py`, `config.py` to CIRCUITPY.
+2. Copy `lib/`, `html/`, `code.py`, `boot.py`, `safemode.py`, `config.py` to CIRCUITPY
+   and create an empty folder `sd` there (CircuitPython 10 needs the mount point).
 3. Copy `secrets_example.py` to `secrets.py` and fill in your values.
    `ap_password` needs 8 to 63 characters.
 4. Put `server.crt` and `server.key` for `192.168.4.1` on the device. Without them

@@ -311,6 +311,11 @@ def mount_sd():
         storage.mount(storage.VfsFat(_sd_card), SD_PATH)
     except Exception as e:
         print("[SD] mount failed:", e)
+        if "Mount point" in str(e):
+            # CircuitPython 10 needs an empty folder "sd" on CIRCUITPY. code.py
+            # cannot create it (the drive belongs to the computer, see boot.py).
+            e = "folder 'sd' missing on CIRCUITPY — create it from the computer"
+            print("[SD]", e)
         _sd_error("mount", e)
         intermediate.sd_status = "error"
         _sd_release()
