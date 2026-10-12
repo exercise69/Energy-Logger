@@ -16,8 +16,10 @@ config = {
     "sd_cs_pin": "A1",
     "logging_enabled": True,
 
-    # OLED SSD1306 128x64 on STEMMA QT
-    "display_address": 0x3D,
+    # OLED on STEMMA QT. "auto" detects SSD1306 128x64 or SSD1327 128x128
+    # by the status byte; set "ssd1306", "ssd1327" or "none" to force it.
+    "display": "auto",
+    "display_address": "auto",     # or 0x3D / 0x3C
 
     # Health log: one line of operating state every n seconds
     "health_interval": 300,

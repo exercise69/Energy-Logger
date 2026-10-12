@@ -49,6 +49,17 @@ Englisch, die Oberfläche bleibt Deutsch.
   Cache-Name je Build.
 - Fehlt das Zertifikat, läuft der Server per HTTP auf Port 80 statt gar nicht.
 
+### Added (Hardwaretest 12.10.)
+
+- Display-Erkennung: SSD1306 128×64 oder SSD1327 128×128 über das I²C-Statusbyte,
+  Ergebnis in BOOT-Zeile und Diagnose, Knopf „Display testen", Typ in
+  `config.py` erzwingbar.
+
+### Fixed (Hardwaretest 12.10.)
+
+- Der Server startete nicht („Cannot start server on None:443"): Die AP-Adresse
+  ist direkt nach `start_ap()` kurz `None`. Server bindet jetzt an `0.0.0.0`.
+
 ### Removed
 
 - MQTT (wurde nie genutzt), NTP, Default-Uhrzeit 2026-01-01.

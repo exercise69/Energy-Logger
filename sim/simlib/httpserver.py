@@ -129,6 +129,10 @@ class Server:
         return deco
 
     def start(self, host="0.0.0.0", port=80):
+        # Like the original: an unresolvable host aborts (seen on the device
+        # when the AP address was still None)
+        if host in (None, "None", ""):
+            raise RuntimeError(f"Cannot start server on {host}:{port}")
         if self._sock is not None:
             return
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

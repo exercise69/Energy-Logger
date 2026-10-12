@@ -46,6 +46,11 @@ def parse_args():
     p.add_argument("--shelly-time", action="store_true", help="Shelly already has a time")
     p.add_argument("--no-sd", action="store_true", help="start without an SD card")
     p.add_argument("--reset-sd", action="store_true", help="empty the stand-in SD card")
+    p.add_argument("--display", default="ssd1306",
+                   choices=("ssd1306", "ssd1327", "none", "unknown"),
+                   help="display on the I2C bus (status byte as on the hardware)")
+    p.add_argument("--display-addr", type=lambda x: int(x, 0), default=0x3D,
+                   help="I2C address of the display")
     return p.parse_args()
 
 
@@ -80,6 +85,8 @@ def main():
         "shelly_offline": False,
         "wifi_off": False,
         "sd_present": not args.no_sd,
+        "display_kind": args.display,
+        "display_addr": args.display_addr,
         "reset_reason": ("SOFTWARE" if os.environ.pop("ENERGY_LOGGER_SIM_RESET", None)
                          else "POWER_ON"),
     }
@@ -102,6 +109,8 @@ def main():
             "watchdog_trips": state["watchdog_trips"],
             "led": state.get("led"),
             "display": lines,
+            "display_driver": getattr(disp, "kind", None),
+            "display_size": [getattr(disp, "width", None), getattr(disp, "height", None)],
         }
 
     def action(name, params):

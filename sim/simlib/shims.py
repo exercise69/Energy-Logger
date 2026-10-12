@@ -85,6 +85,47 @@ class _Pixel(list):
         _state["led"] = self[0]
 
 
+# ============================ I2C ============================
+# Status bytes of the displays: SSD1327 measured on the device (0x02),
+# SSD1306 as documented (0x43 = display off, ID 0x03).
+DISPLAY_STATUS = {"ssd1306": 0x43, "ssd1327": 0x02, "unknown": 0x5A}
+
+
+class _I2C:
+    def __init__(self):
+        self._locked = False
+
+    def try_lock(self):
+        if self._locked:
+            return False
+        self._locked = True
+        return True
+
+    def unlock(self):
+        self._locked = False
+
+    def scan(self):
+        return [] if _state["display_kind"] == "none" else [_state["display_addr"]]
+
+    def readfrom_into(self, addr, buf):
+        if not self._locked:
+            raise RuntimeError("Function requires lock")
+        if addr not in self.scan():
+            raise OSError(errno.EIO, "Input/output error")
+        for n in range(len(buf)):
+            buf[n] = DISPLAY_STATUS[_state["display_kind"]]
+
+
+_i2c = None
+
+
+def _stemma_i2c():
+    global _i2c                  # board.STEMMA_I2C() is a singleton on the device
+    if _i2c is None:
+        _i2c = _I2C()
+    return _i2c
+
+
 # ============================ Pins ============================
 _claimed = {}
 
@@ -137,7 +178,14 @@ class _Radio:
     def __init__(self):
         self.connected = False
         self.ipv4_address = None
-        self.ipv4_address_ap = "192.168.4.1"
+        self._ap_since = None
+
+    @property
+    def ipv4_address_ap(self):
+        # As on the ESP32-S3: the AP address appears a moment after start_ap()
+        if self._ap_since is None or time.monotonic() - self._ap_since < 1.0:
+            return None
+        return "192.168.4.1"
 
     def connect(self, ssid, password, timeout=None, **kw):
         if _state["wifi_off"]:
@@ -149,9 +197,10 @@ class _Radio:
     def start_ap(self, ssid=None, password=None, **kw):
         if password is not None and not 8 <= len(password) <= 63:
             raise ValueError("password length must be 8-63")
+        self._ap_since = time.monotonic()
 
     def stop_ap(self):
-        pass
+        self._ap_since = None
 
 
 class _Response:
@@ -261,7 +310,7 @@ def install(state, nvm_path, secrets, config):
 
     pins = {n: _Obj(name=n) for n in ("A0", "A1", "A2", "A3", "SCK", "MOSI", "MISO",
                                       "NEOPIXEL", "SDA", "SCL")}
-    _mod("board", SPI=lambda: _Obj(), STEMMA_I2C=lambda: _Obj(), **pins)
+    _mod("board", SPI=lambda: _Obj(), STEMMA_I2C=_stemma_i2c, **pins)
     _mod("digitalio", DigitalInOut=_DigitalInOut,
          Direction=_Obj(INPUT="in", OUTPUT="out"), Pull=_Obj(UP="up", DOWN="down"))
     _mod("storage", VfsFat=lambda card: _Obj(), mount=_mount, umount=_umount,
@@ -272,14 +321,22 @@ def install(state, nvm_path, secrets, config):
 
     _mod("displayio", Group=Group, release_displays=lambda: None)
     _mod("terminalio", FONT=_Obj())
-    _mod("i2cdisplaybus", I2CDisplayBus=lambda i2c, device_address=0: _Obj())
+    def _bus(i2c, device_address=0):
+        if i2c._locked:
+            raise RuntimeError("I2C bus still locked")   # detection must unlock
+        return _Obj(address=device_address)
 
-    def _ssd1306(bus, width=128, height=64):
-        d = _Obj(root_group=None)
-        state["display"] = d
-        return d
+    _mod("i2cdisplaybus", I2CDisplayBus=_bus)
 
-    _mod("adafruit_displayio_ssd1306", SSD1306=_ssd1306)
+    def _display(kind):
+        def make(bus, width=128, height=64):
+            d = _Obj(root_group=None, kind=kind, width=width, height=height)
+            state["display"] = d
+            return d
+        return make
+
+    _mod("adafruit_displayio_ssd1306", SSD1306=_display("ssd1306"))
+    _mod("adafruit_ssd1327", SSD1327=_display("ssd1327"))
     pkg = _mod("adafruit_display_text")
     pkg.label = _mod("adafruit_display_text.label", Label=Label)
     _mod("neopixel", NeoPixel=_Pixel)

@@ -78,29 +78,97 @@ class Intermediate:
         self.cpu_temp = 0.0
         self.mem_free = 0
         self.mem_block = 0
+        self.display_test_until = 0.0
 
 intermediate = Intermediate()
 
 # ================= DISPLAY =================
 # A missing display or a stuck I2C bus must not stop the logger — measuring
 # and logging matter more than the display.
+#
+# Two displays are in use on the same address 0x3D: SSD1306 128x64 and
+# SSD1327 128x128. They are told apart by the status byte an I2C read returns:
+#   SSD1327: 0x02                    (measured on the device, 2026-10-12)
+#   SSD1306: low nibble 0x03/0x06/0x07, e.g. 0x03 or 0x43 (datasheet/common
+#            drivers — not yet measured on our hardware)
+# config["display"] can force a type if the detection is ever wrong.
+DISPLAY_SIZES = {"ssd1306": (128, 64), "ssd1327": (128, 128)}
+DISPLAY_ADDRESSES = (0x3D, 0x3C)
+
+def classify_display(status):
+    """Display type for an I2C status byte, or None if unknown."""
+    if status is None:
+        return None
+    if status & 0x3F == 0x02:
+        return "ssd1327"
+    if status & 0x0F in (0x03, 0x06, 0x07):
+        return "ssd1306"
+    return None
+
+def detect_display(i2c):
+    """Scan the bus. Returns (address, status byte) or (None, None)."""
+    while not i2c.try_lock():
+        pass
+    try:
+        found = i2c.scan()
+        wanted = config.get("display_address", "auto")
+        for addr in (DISPLAY_ADDRESSES if wanted == "auto" else (wanted,)):
+            if addr in found:
+                buf = bytearray(1)
+                try:
+                    i2c.readfrom_into(addr, buf)
+                    return addr, buf[0]
+                except OSError:
+                    return addr, None
+        return None, None
+    finally:
+        i2c.unlock()
+
+# Result of the detection, for status.json and the BOOT line
+display_info = {"type": "none", "address": None, "status": None, "how": ""}
 _lines = []
 try:
     import displayio, terminalio
     from i2cdisplaybus import I2CDisplayBus
-    import adafruit_displayio_ssd1306
     from adafruit_display_text import label
     displayio.release_displays()
-    _display_bus = I2CDisplayBus(board.STEMMA_I2C(),
-                                 device_address=config.get("display_address", 0x3D))
-    display = adafruit_displayio_ssd1306.SSD1306(_display_bus, width=128, height=64)
-    _group = displayio.Group()
-    display.root_group = _group
-    for _i in range(6):
-        _lbl = label.Label(terminalio.FONT, text="", color=0xFFFFFF, x=0, y=5 + _i * 11)
-        _group.append(_lbl)
-        _lines.append(_lbl)
+    _i2c = board.STEMMA_I2C()
+    _addr, _status = detect_display(_i2c)
+    _forced = config.get("display", "auto")
+    if _addr is None:
+        _kind, _how = "none", "nothing on 0x3C/0x3D"
+    elif _forced != "auto":
+        _kind, _how = _forced, "config"
+    else:
+        _kind = classify_display(_status)
+        _how = "auto"
+        if _kind is None:
+            # Unknown status byte: the original hardware's display is the safe guess
+            _kind, _how = "ssd1306", "fallback"
+    display_info.update(type=_kind, address=_addr, status=_status, how=_how)
+
+    if _kind in DISPLAY_SIZES:
+        _w, _h = DISPLAY_SIZES[_kind]
+        _display_bus = I2CDisplayBus(_i2c, device_address=_addr)
+        if _kind == "ssd1327":
+            import adafruit_ssd1327
+            display = adafruit_ssd1327.SSD1327(_display_bus, width=_w, height=_h)
+        else:
+            import adafruit_displayio_ssd1306
+            display = adafruit_displayio_ssd1306.SSD1306(_display_bus, width=_w, height=_h)
+        _group = displayio.Group()
+        display.root_group = _group
+        # Six lines spread over the height: 11 px apart on 64, 21 px on 128
+        _step = (_h - 9) // 5
+        for _i in range(6):
+            _lbl = label.Label(terminalio.FONT, text="", color=0xFFFFFF,
+                               x=0, y=5 + _i * _step)
+            _group.append(_lbl)
+            _lines.append(_lbl)
+    status_txt = "-" if _status is None else hex(_status)
+    print(f"[DISPLAY] {_kind} at {_addr and hex(_addr)} (status {status_txt}, {_how})")
 except Exception as e:
+    display_info.update(type="error", how=str(e))
     print("[DISPLAY] not available:", e)
 
 def show_line(n, text):
@@ -523,8 +591,11 @@ def _log_boot():
                     log_error("boot_out.txt:\n" + f.read())
             except Exception:
                 pass
+        d = display_info
         log_error(f"BOOT  v{EL_VERSION} b{EL_BUILD}  reset={reason}  "
-                  f"crashes={nvm[NVM_IDX_CRASHES]}  selfheal={nvm[NVM_IDX_SAFEMODE]}")
+                  f"crashes={nvm[NVM_IDX_CRASHES]}  selfheal={nvm[NVM_IDX_SAFEMODE]}  "
+                  f"display={d['type']}@{d['address'] and hex(d['address'])}"
+                  f"/{d['status'] if d['status'] is None else hex(d['status'])}/{d['how']}")
         nvm[NVM_IDX_FLAG] = NVM_FLAG_BOOT
     except Exception as e:
         print("[BOOT] NVM error:", e)
@@ -689,7 +760,13 @@ def start_server():
         server.stop()
     except Exception:
         pass
-    server.start(str(intermediate.ap_ip), 443 if HTTPS else 80)
+    # All interfaces, not the AP address: on the device that address was
+    # briefly None after start_ap(), and the server then refused to start.
+    server.start("0.0.0.0", 443 if HTTPS else 80)
+
+def ap_address():
+    ip = wifi.radio.ipv4_address_ap
+    return None if ip is None else str(ip)
 
 def _json(request, data, status=200):
     return Response(request, json.dumps(data), content_type="application/json",
@@ -724,7 +801,7 @@ def route_status(request: Request):
         "shelly_age_s": (None if i.shelly_last_ok is None
                          else round(time.monotonic() - i.shelly_last_ok)),
         "poll_interval": POLL_INTERVAL,
-        "ap_ssid": AP_SSID, "ap_ip": i.ap_ip, "sta_ip": i.sta_ip, "https": HTTPS,
+        "ap_ssid": AP_SSID, "ap_ip": ap_address(), "sta_ip": i.sta_ip, "https": HTTPS,
         "rtc_synced": i.rtc_synced, "time": timestamp(), "time_source": i.time_source,
         "shelly_has_time": i.shelly_has_time,
         "logging_enabled": i.logging_enabled, "sd_status": i.sd_status,
@@ -736,6 +813,9 @@ def route_status(request: Request):
         "cpu_temp": i.cpu_temp, "uptime_h": (time.monotonic() - _boot_mono) / 3600.0,
         "loop_dt": i.loop_dt, "loop_dt_max": i.loop_dt_max, "srv_errors": i.srv_errors,
         "status_requests": _status_requests,
+        "display": display_info["type"], "display_how": display_info["how"],
+        "display_address": display_info["address"],
+        "display_status": display_info["status"],
     })
 
 @server.route("/toggle_shelly", methods=["POST"])
@@ -869,6 +949,11 @@ def route_remount_sd(request: Request):
     ok = mount_sd()
     return _json(request, {"ok": ok, "sd_status": intermediate.sd_status})
 
+@server.route("/display_test", methods=["POST"])
+def route_display_test(request: Request):
+    intermediate.display_test_until = time.monotonic() + 8
+    return _json(request, {"ok": bool(_lines), "display": display_info["type"]})
+
 @server.route("/reset_crashes", methods=["POST"])
 def route_reset_crashes(request: Request):
     try:
@@ -921,6 +1006,18 @@ async def task_display():
     show_line(1, f"v{EL_VERSION} Build {EL_BUILD}")
     await asyncio.sleep(3)
     while True:
+        if time.monotonic() < i.display_test_until:
+            # Test pattern: every line filled, type and address of the display
+            d = display_info
+            show_line(0, "#" * 21)
+            show_line(1, "DISPLAY-TEST")
+            show_line(2, d["type"].upper())
+            show_line(3, f"Adresse {d['address'] and hex(d['address'])}")
+            show_line(4, f"Erkennung: {d['how']}")
+            show_line(5, "#" * 21)
+            await asyncio.sleep(0.5)
+            continue
+        i.ap_ip = ap_address()
         show_line(0, f"P: {i.power:.1f} W")
         show_line(1, f"E: {i.energy:.1f} Wh")
         show_line(2, _SHELLY_TEXT.get(i.shelly_state, i.shelly_state) +
@@ -972,7 +1069,12 @@ async def main():
     except Exception as e:
         log_error(f"AP START failed ({e}) — ap_password in secrets.py needs 8 to 63 characters")
         raise
-    intermediate.ap_ip = str(wifi.radio.ipv4_address_ap)
+    # The AP address appears a moment after start_ap(); only for the log.
+    for _ in range(30):
+        intermediate.ap_ip = ap_address()
+        if intermediate.ap_ip:
+            break
+        await asyncio.sleep(0.1)
     print("[AP]", AP_SSID, intermediate.ap_ip)
     start_server()
 

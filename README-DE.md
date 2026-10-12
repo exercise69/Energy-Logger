@@ -33,7 +33,7 @@ installierbare, offline-fähige Web-App (PWA) über **HTTPS** im eigenen WLAN au
 |---|---|
 | Adafruit QT Py ESP32-S3 (4 MB Flash, 2 MB PSRAM) | — |
 | SD-Karten-Modul | SPI (SCK/MOSI/MISO), CS an **A1** |
-| OLED SSD1306 128×64 | STEMMA QT / I²C, Adresse **0x3D** |
+| OLED SSD1306 128×64 **oder** SSD1327 128×128 | STEMMA QT / I²C, 0x3D oder 0x3C — wird automatisch erkannt |
 | Schreibschutz-Brücke (optional) | **A0** an GND, siehe `boot.py` |
 | Shelly Plus Plug S Gen 2 | im AP-Modus, Werks-IP 192.168.33.1 |
 
@@ -59,7 +59,7 @@ CIRCUITPY/
 Aus dem CircuitPython-10.x-Bundle: `adafruit_httpserver`, `adafruit_requests`,
 `adafruit_connection_manager`, `adafruit_sdcard`, `adafruit_bus_device`,
 `adafruit_displayio_ssd1306`, `adafruit_display_text`, `asyncio`, `adafruit_ticks`,
-`neopixel`, `adafruit_pixelbuf`.
+`neopixel`, `adafruit_pixelbuf`, `adafruit_ssd1327`.
 
 **`adafruit_sdcard`** verwenden, nicht `sdcardio` — beim Schwesterprojekt
 SolarLoader brachte `sdcardio` im Feld Schreibfehler und doppelte Zeilen.
@@ -79,6 +79,16 @@ SolarLoader brachte `sdcardio` im Feld Schreibfehler und doppelte Zeilen.
 Die Uhr hat weder Batterie noch Internet. Die App schickt beim Öffnen automatisch
 die Uhrzeit des Telefons, solange der Logger „nicht gestellt" meldet. Hat der
 Shelly selbst eine Uhrzeit, wird auch die verwendet.
+
+## Display-Erkennung
+
+Beim Start durchsucht der Logger den I²C-Bus (0x3D, 0x3C) und liest ein
+Statusbyte vom Display. Das SSD1327 antwortet `0x02` (gemessen), das SSD1306
+`0x03`/`0x43` (Datenblatt). Bei unbekanntem Byte wird SSD1306 angenommen. Das
+Ergebnis steht in der BOOT-Zeile des Fehlerprotokolls und in der App unter
+*Diagnose*; dort zeigt *Display testen* ein Testbild. Liegt die Erkennung einmal
+daneben, lässt sich der Typ in `config.py` festlegen (`"display": "ssd1306"`,
+`"ssd1327"` oder `"none"`).
 
 ## Web-App
 

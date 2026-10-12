@@ -260,6 +260,14 @@ function showStatus(d) {
   setText('d_mem', d.mem_free ? formatBytes(d.mem_free) + ' / ' + formatBytes(d.mem_block)
                               : 'nach der ersten Messung (5 min)');
   setText('d_cpu', d.cpu_temp ? d.cpu_temp.toFixed(1) + ' °C' : '--');
+  const DISPLAY_NAMES = { ssd1306: 'SSD1306 128×64', ssd1327: 'SSD1327 128×128',
+                          none: 'keins gefunden', error: 'Fehler' };
+  const HOW = { auto: 'automatisch erkannt', config: 'fest in config.py',
+                fallback: 'unbekannt — als SSD1306 angenommen' };
+  setText('d_display', (DISPLAY_NAMES[d.display] || d.display) +
+          (d.display_address != null ? ' · 0x' + d.display_address.toString(16) : '') +
+          (d.display_status != null ? ' · Status 0x' + d.display_status.toString(16) : '') +
+          (HOW[d.display_how] ? ' · ' + HOW[d.display_how] : (d.display_how ? ' · ' + d.display_how : '')));
   setText('d_loop', d.loop_dt.toFixed(2) + ' s / ' + d.loop_dt_max.toFixed(2) + ' s');
   setText('d_srv', d.srv_errors);
   setText('d_sd_error', d.sd_error_count ? d.sd_error_txt + ' (' + d.sd_error_at + ', ' +
@@ -456,6 +464,14 @@ $('remountSd').addEventListener('click', async () => {
     alert(d.ok ? 'SD-Karte eingebunden' : 'SD-Karte nicht lesbar');
   } catch (e) { alert('Keine Verbindung'); }
   updateData();
+});
+
+$('displayTest').addEventListener('click', async () => {
+  try {
+    const d = await (await post('display_test')).json();
+    alert(d.ok ? 'Das Display zeigt jetzt 8 Sekunden ein Testbild.'
+               : 'Kein Display erkannt.');
+  } catch (e) { alert('Keine Verbindung'); }
 });
 
 $('resetCrashes').addEventListener('click', async () => {
