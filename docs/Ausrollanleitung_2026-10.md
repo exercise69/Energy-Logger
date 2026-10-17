@@ -1,6 +1,6 @@
 # Ausrollanleitung — Energy-Logger 2.0 (Oktober 2026)
 
-Von Version 1.1 (Januar 2026) auf **2.0, Build 16**, dazu CircuitPython
+Von Version 1.1 (Januar 2026) auf **2.0, Build 21**, dazu CircuitPython
 10.0.3 → **10.1.4**. Alles mit dem USB-Kabel, der Logger hat kein Update über
 das Netz.
 
@@ -39,9 +39,6 @@ das Netz.
 ## Ablauf
 
 **1. Gerät anstecken.** Das Laufwerk `CIRCUITPY` erscheint.
-
-> Erscheint es nur schreibgeschützt: die Brücke A0–GND entfernen. Mit Brücke
-> darf nur das Programm schreiben, nicht der Mac (siehe `boot.py`).
 
 **2. Alten Stand sichern.** Den ganzen Inhalt von CIRCUITPY in einen Ordner auf
 dem Mac kopieren, z. B. `_olderVersions/CIRCUITPY_vor_2.0/`.
@@ -86,6 +83,7 @@ Energie vom Shelly? Am Telefon mit `QT-LOGGER` verbinden und
 
 ```
 secrets_shelly.py   (ersetzt durch secrets.py)
+boot.py             (Schreibschutz-Brücke entfällt, A0 ist jetzt für eine LED reserviert)
 lib/                (wird komplett neu kopiert — MQTT und NTP fallen weg)
 ```
 
@@ -99,7 +97,6 @@ html/           → CIRCUITPY/html/         (siehe Warnung unten)
 config.py       → CIRCUITPY/config.py     (neu)
 secrets.py      → CIRCUITPY/secrets.py    (neu)
 safemode.py     → CIRCUITPY/safemode.py   (neu)
-boot.py         → CIRCUITPY/boot.py
 code.py         → CIRCUITPY/code.py       (zum Schluss)
 ```
 
@@ -121,7 +118,7 @@ Satz treffen, deshalb `code.py` zuletzt.
 
 ## Danach prüfen
 
-**1. Display:** zeigt drei Sekunden `Energy-Logger` und `v2.0 Build 16`, danach
+**1. Display:** zeigt drei Sekunden `Energy-Logger` und `v2.0 Build 21`, danach
 die Messwerte.
 
 **2. Telefon:** altes WLAN `QT-LOGGER` vergessen, mit `Energy-Logger` verbinden
@@ -131,10 +128,10 @@ die Messwerte.
 „(Telefon)". Die App stellt sie beim Öffnen selbst.
 
 **4. Diagnose** aufklappen:
-- „Software Gerät" und „Software Oberfläche" zeigen beide **Build 16**.
+- „Software Gerät" und „Software Oberfläche" zeigen beide **Build 21**.
   Steht bei der Oberfläche eine Warnung: Seite neu laden.
 - Fehlerprotokoll → „Anzeigen": oben eine Zeile
-  `BOOT  v2.0 b16  reset=…  crashes=0  selfheal=0`.
+  `BOOT  v2.0 b21  reset=…  crashes=0  selfheal=0`.
 
 **5. Nach etwa einer Minute:** „Messprotokoll" zeigt `energy_log.csv` mit
 wachsender Größe.

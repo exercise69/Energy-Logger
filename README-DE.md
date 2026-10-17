@@ -34,7 +34,7 @@ installierbare, offline-fähige Web-App (PWA) über **HTTPS** im eigenen WLAN au
 | Adafruit QT Py ESP32-S3 (4 MB Flash, 2 MB PSRAM) | — |
 | SD-Karte: Adafruit Micro SD Card BFF (5683) oder anderes 3,3-V-Modul | SPI (SCK/MOSI/MISO), CS an **A1** (BFF: Lötbrücke A1, ab Werk TX) |
 | OLED SSD1306 128×64 **oder** SSD1327 128×128 | STEMMA QT / I²C, 0x3D oder 0x3C — wird automatisch erkannt |
-| Schreibschutz-Brücke (optional) | **A0** an GND, siehe `boot.py` |
+| Weiße LED (optional) | **A0** über Vorwiderstand an GND — reserviert, noch ohne Funktion |
 | Shelly Plus Plug S Gen 2 | im AP-Modus, Werks-IP 192.168.33.1 |
 
 ## Dateien auf dem Gerät (CIRCUITPY)
@@ -42,7 +42,6 @@ installierbare, offline-fähige Web-App (PWA) über **HTTPS** im eigenen WLAN au
 ```
 CIRCUITPY/
 ├─ code.py            Hauptprogramm
-├─ boot.py            Schreibschutz-Brücke an A0
 ├─ safemode.py        protokolliert den Grund eines Sicherheitsmodus und startet neu
 ├─ config.py          Geräteeinstellungen (keine Zugangsdaten)
 ├─ secrets.py         WLAN-Zugangsdaten — Vorlage: secrets_example.py
@@ -68,7 +67,7 @@ SolarLoader brachte `sdcardio` im Feld Schreibfehler und doppelte Zeilen.
 ## Einrichtung
 
 1. CircuitPython 10.x für den QT Py ESP32-S3 aufspielen.
-2. `lib/`, `html/`, `code.py`, `boot.py`, `safemode.py`, `config.py` auf CIRCUITPY kopieren
+2. `lib/`, `html/`, `code.py`, `safemode.py`, `config.py` auf CIRCUITPY kopieren
    und dort einen leeren Ordner `sd` anlegen (CircuitPython 10 braucht den Einhängepunkt).
 3. `secrets_example.py` nach `secrets.py` kopieren und ausfüllen.
    `ap_password` braucht 8 bis 63 Zeichen.

@@ -63,6 +63,9 @@ Englisch, die Oberfläche bleibt Deutsch.
 ### Removed
 
 - MQTT (wurde nie genutzt), NTP, Default-Uhrzeit 2026-01-01.
+- Schreibschutz-Brücke an A0 samt `boot.py` (Hardwaretest 17.10.): Das Programm
+  schreibt nichts mehr auf CIRCUITPY, alle Protokolle liegen auf der SD-Karte.
+  A0 ist für eine LED reserviert, die noch keine Funktion hat.
 
 ### Added
 

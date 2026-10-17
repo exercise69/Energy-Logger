@@ -15,7 +15,7 @@
  * sees a real network error when the logger is unreachable.
  */
 
-const CACHE_NAME = "energy-logger-v2.0-b16";   // set by tools/stamp.py
+const CACHE_NAME = "energy-logger-v2.0-b21";   // set by tools/stamp.py
 const CACHE_IMGS = "energy-logger-imgs-v1";
 
 const STATIC_SHELL = [

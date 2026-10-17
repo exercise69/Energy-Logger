@@ -12,9 +12,9 @@
 # Set by tools/stamp.py, not by hand — the script keeps these lines, app.js
 # and the service worker cache name in sync.
 EL_VERSION = "2.0"
-EL_BUILD   = 16
-EL_DATE    = "2026-10-12"
-EL_NOTE    = "Revision 2026-10: lessons from the SolarLoader"
+EL_BUILD   = 21
+EL_DATE    = "2026-10-17"
+EL_NOTE    = "A0 write-protect jumper and boot.py removed"
 
 import time, board, digitalio, storage, rtc, os, json, gc, asyncio
 import microcontroller, wifi, socketpool
@@ -313,7 +313,7 @@ def mount_sd():
         print("[SD] mount failed:", e)
         if "Mount point" in str(e):
             # CircuitPython 10 needs an empty folder "sd" on CIRCUITPY. code.py
-            # cannot create it (the drive belongs to the computer, see boot.py).
+            # cannot create it (CIRCUITPY is read-only for code.py).
             e = "folder 'sd' missing on CIRCUITPY — create it from the computer"
             print("[SD]", e)
         _sd_error("mount", e)
@@ -1036,26 +1036,6 @@ async def task_display():
             show_line(5, "Uhr nicht gestellt")
         await asyncio.sleep(0.5)
 
-async def task_write_switch():
-    """A0–GND jumper removed -> reset, so boot.py hands CIRCUITPY back to the
-    computer (see boot.py)."""
-    try:
-        switch = digitalio.DigitalInOut(board.A0)
-        switch.direction = digitalio.Direction.INPUT
-        switch.pull = digitalio.Pull.UP
-    except Exception as e:
-        print("[A0] not available:", e)
-        return
-    prev = switch.value
-    while True:
-        val = switch.value
-        if val and not prev:
-            await asyncio.sleep(0.05)          # debounce
-            if switch.value:
-                microcontroller.reset()
-        prev = val
-        await asyncio.sleep(0.05)
-
 # ================= MAIN =================
 async def main():
     set_led(COLOR_OFF)
@@ -1097,7 +1077,6 @@ async def main():
         task_sd_writer(),
         task_server(),
         task_display(),
-        task_write_switch(),
         task_health(),
         task_healthy(),
     )

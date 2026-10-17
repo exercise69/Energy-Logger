@@ -148,7 +148,7 @@ class _DigitalInOut:
 
     @property
     def value(self):
-        return True            # A0 jumper open = normal operation
+        return True            # inputs read high (pull-up)
 
     def deinit(self):
         _claimed.pop(self._name, None)
