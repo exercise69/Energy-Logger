@@ -66,6 +66,9 @@ Englisch, die Oberfläche bleibt Deutsch.
 - Schreibschutz-Brücke an A0 samt `boot.py` (Hardwaretest 17.10.): Das Programm
   schreibt nichts mehr auf CIRCUITPY, alle Protokolle liegen auf der SD-Karte.
   A0 ist für eine LED reserviert, die noch keine Funktion hat.
+- Weiße LED an A0 wird beim Start fest auf LOW gesetzt (aus). Unbenutzt hält
+  der Pin seinen internen Pull-up, und die LED glimmt. Schalten mit
+  `set_white_led(on)`, noch ohne Funktion.
 
 ### Added
 

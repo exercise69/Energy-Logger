@@ -145,10 +145,18 @@ class _DigitalInOut:
         self._name = _claim(pin)
         self.direction = None
         self.pull = None
+        self._out = None       # set once the pin is an output
+
+    def switch_to_output(self, value=False):
+        self._out = bool(value)
 
     @property
     def value(self):
-        return True            # inputs read high (pull-up)
+        return True if self._out is None else self._out   # inputs read high (pull-up)
+
+    @value.setter
+    def value(self, v):
+        self._out = bool(v)
 
     def deinit(self):
         _claimed.pop(self._name, None)

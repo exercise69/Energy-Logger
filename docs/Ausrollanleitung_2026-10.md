@@ -1,6 +1,6 @@
 # Ausrollanleitung — Energy-Logger 2.0 (Oktober 2026)
 
-Von Version 1.1 (Januar 2026) auf **2.0, Build 21**, dazu CircuitPython
+Von Version 1.1 (Januar 2026) auf **2.0, Build 22**, dazu CircuitPython
 10.0.3 → **10.1.4**. Alles mit dem USB-Kabel, der Logger hat kein Update über
 das Netz.
 
@@ -118,7 +118,7 @@ Satz treffen, deshalb `code.py` zuletzt.
 
 ## Danach prüfen
 
-**1. Display:** zeigt drei Sekunden `Energy-Logger` und `v2.0 Build 21`, danach
+**1. Display:** zeigt drei Sekunden `Energy-Logger` und `v2.0 Build 22`, danach
 die Messwerte.
 
 **2. Telefon:** altes WLAN `QT-LOGGER` vergessen, mit `Energy-Logger` verbinden
@@ -128,10 +128,10 @@ die Messwerte.
 „(Telefon)". Die App stellt sie beim Öffnen selbst.
 
 **4. Diagnose** aufklappen:
-- „Software Gerät" und „Software Oberfläche" zeigen beide **Build 21**.
+- „Software Gerät" und „Software Oberfläche" zeigen beide **Build 22**.
   Steht bei der Oberfläche eine Warnung: Seite neu laden.
 - Fehlerprotokoll → „Anzeigen": oben eine Zeile
-  `BOOT  v2.0 b21  reset=…  crashes=0  selfheal=0`.
+  `BOOT  v2.0 b22  reset=…  crashes=0  selfheal=0`.
 
 **5. Nach etwa einer Minute:** „Messprotokoll" zeigt `energy_log.csv` mit
 wachsender Größe.

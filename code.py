@@ -12,9 +12,9 @@
 # Set by tools/stamp.py, not by hand — the script keeps these lines, app.js
 # and the service worker cache name in sync.
 EL_VERSION = "2.0"
-EL_BUILD   = 21
+EL_BUILD   = 22
 EL_DATE    = "2026-10-17"
-EL_NOTE    = "A0 write-protect jumper and boot.py removed"
+EL_NOTE    = "White LED on A0 driven low (off), no function yet"
 
 import time, board, digitalio, storage, rtc, os, json, gc, asyncio
 import microcontroller, wifi, socketpool
@@ -195,6 +195,20 @@ def set_led(color):
         _pixel[0] = color
         _pixel.show()
         _led = color
+
+# White LED on A0 (anode on A0, cathode via resistor to GND). No function yet.
+# Driven LOW from the start: left unused, the pin keeps its internal pull-up
+# and the LED glows faintly.
+try:
+    _white_led = digitalio.DigitalInOut(board.A0)
+    _white_led.switch_to_output(False)
+except Exception as e:
+    print("[LED] A0 not available:", e)
+    _white_led = None
+
+def set_white_led(on):
+    if _white_led is not None:
+        _white_led.value = bool(on)
 
 # ================= CLOCK =================
 # The Shelly AP has no internet, so NTP never works. The time comes from the

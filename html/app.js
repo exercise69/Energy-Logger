@@ -5,7 +5,7 @@
 
 // UI software version. Set by tools/stamp.py, not by hand.
 const UI_VERSION = '2.0';
-const UI_BUILD   = 21;
+const UI_BUILD   = 22;
 const UI_DATE    = '2026-10-17';
 
 const $ = (id) => document.getElementById(id);
